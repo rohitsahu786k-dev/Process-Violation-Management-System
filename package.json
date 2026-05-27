@@ -7,6 +7,8 @@
     "start": "vercel dev"
   },
   "dependencies": {
+    "cloudinary": "^2.10.0",
+    "formidable": "^3.5.4",
     "mongodb": "^6.15.0",
     "nodemailer": "^6.10.1"
   },
