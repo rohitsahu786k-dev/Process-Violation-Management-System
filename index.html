@@ -491,7 +491,7 @@ function LoginPage({ onLogin }) {
       <div style={{width:"100%",maxWidth:420}}>
         {/* Logo */}
         <div style={{textAlign:"center",marginBottom:28}}>
-          <img src={LOGO_SRC} alt="ONEPWS Logo" style={{width:220,height:"auto",marginBottom:14,borderRadius:8}}/>
+          <img src={LOGO_DARK_SRC} alt="ONEPWS Logo" style={{width:220,height:"auto",marginBottom:14,borderRadius:8}}/>
           <p style={{fontSize:13,color:"rgba(255,255,255,.6)",marginTop:4,fontWeight:500}}>Process Violation Management System</p>
           <p style={{fontSize:10.5,color:"var(--text3)",marginTop:3,letterSpacing:".03em"}}>{ISO_CERTS}</p>
         </div>
@@ -551,9 +551,9 @@ function Sidebar({ active, setPage, user, notifCount }) {
       {/* Logo */}
       <div style={{padding:"10px 10px 10px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",gap:8,flexShrink:0,minHeight:50}}>
         {collapsed ? (
-          <img src={LOGO_SRC} alt="ONEPWS" title="Expand menu" onClick={()=>setCollapsed(false)} style={{width:32,height:32,objectFit:"contain",cursor:"pointer",flexShrink:0}}/>
+          <img src={LOGO_DARK_SRC} alt="ONEPWS" title="Expand menu" onClick={()=>setCollapsed(false)} style={{width:32,height:32,objectFit:"contain",cursor:"pointer",flexShrink:0}}/>
         ) : (
-          <img src={LOGO_SRC} alt="ONEPWS" style={{height:34,maxWidth:160,objectFit:"contain",flexShrink:0}}/>
+          <img src={LOGO_DARK_SRC} alt="ONEPWS" style={{height:34,maxWidth:160,objectFit:"contain",flexShrink:0}}/>
         )}
         {/* Toggle button  always visible */}
         <button onClick={()=>setCollapsed(!collapsed)}
