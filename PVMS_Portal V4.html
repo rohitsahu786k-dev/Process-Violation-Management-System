@@ -1,0 +1,2818 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Process Violation Management System | ONEPWS Pvt. Ltd.</title>
+<link rel="icon" type="image/png" href="/assests/favicon.png">
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --navy:#0D1B2A;--blue:#1B6EF3;--blue-l:#EBF3FF;
+  --line:#E4EAF2;--line2:#C8D4E6;
+  --bg:#F5F7FB;--bg2:#EDF0F7;--bg3:#FFFFFF;
+  --text:#0D1B2A;--text2:#334B6C;--text3:#6B7E9A;
+  --green:#0A6E3F;--green-bg:#E4F5EE;--green-bd:#A8DBBE;
+  --amber:#915400;--amber-bg:#FEF3D0;--amber-bd:#F5C842;
+  --red:#B91C1C;--red-bg:#FEE8E8;--red-bd:#F9A0A0;
+  --purple:#5035C8;--purple-bg:#EEEAFF;
+  --cyan:#0A6E7A;
+  --font:'Be Vietnam Pro',sans-serif;--mono:'JetBrains Mono',monospace;
+  --r:6px;--r2:10px;--r3:14px;
+  --sh:0 1px 3px rgba(13,27,42,.07),0 4px 16px rgba(13,27,42,.05);
+  --sh2:0 2px 8px rgba(13,27,42,.10),0 8px 32px rgba(13,27,42,.07);
+}
+html,body,#root{height:100%;overflow:hidden;font-family:var(--font)}
+body{background:var(--bg);color:var(--text);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+input,select,textarea,button{font-family:var(--font);font-size:13px}
+button{cursor:pointer}
+.toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:var(--bg3);border:1px solid var(--line);border-radius:var(--r2);padding:10px 14px;box-shadow:var(--sh2);display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);pointer-events:all;animation:slideIn .2s ease;min-width:260px;max-width:360px}
+.toast.success{border-left:3px solid var(--green)}
+.toast.error{border-left:3px solid var(--red)}
+.toast.warning{border-left:3px solid #D97706}
+.toast.info{border-left:3px solid var(--blue)}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+.spinner{width:13px;height:13px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;display:inline-block;vertical-align:middle}
+.spinner.dark{border-color:var(--line);border-top-color:var(--blue)}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+
+// ============================================================
+// PVMS  Process Violation Management System
+// Full Single-File React Application (Firebase-Ready)
+// Version 1.1 | ISO 9001/14001/45001
+// ============================================================
+
+const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
+const LOGO_SRC = '/assests/onepws-logo-transparent.png';
+const LOGO_DARK_SRC = '/assests/onepws-dark-logo-scaled.png';
+const LOGO_B64 = LOGO_SRC;
+
+// ============================================================
+// CONSTANTS & CONFIG
+// ============================================================
+const APP_VERSION = "1.0.0";
+const COMPANY_NAME = "ONEPWS Pvt. Ltd.";
+const COMPANY_SHORT = "ONEPWS";
+const ISO_CERTS = "ISO 9001:2015 | ISO 14001:2015 | ISO 45001:2018";
+
+const SEVERITY_CONFIG = {
+  Minor:    { color:"#16A34A", bg:"#F0FDF4", bd:"#86EFAC", score:-2,  level:1 },
+  Moderate: { color:"#D97706", bg:"#FFFBEB", bd:"#FCD34D", score:-5,  level:2 },
+  Major:    { color:"#EA580C", bg:"#FFF7ED", bd:"#FCA05E", score:-15, level:3 },
+  Critical: { color:"#DC2626", bg:"#FEE8E8", bd:"#F9A0A0", score:-40, level:4 },
+};
+
+const STATUS_CONFIG = {
+  Draft:                { color:"#6B7E9A", bg:"#F0F3F8", label:"Draft" },
+  Submitted:            { color:"#1B6EF3", bg:"#EBF3FF", label:"Submitted" },
+  "Under Review":       { color:"#7C3AED", bg:"#EDE9FE", label:"Under Review" },
+  "Under Investigation":{ color:"#D97706", bg:"#FFFBEB", label:"Investigating" },
+  "CAPA Pending":       { color:"#EA580C", bg:"#FFF7ED", label:"CAPA Pending" },
+  "Verification Pending":{ color:"#0A6E7A", bg:"#DFF5F8", label:"Verification" },
+  Closed:               { color:"#0A6E3F", bg:"#E4F5EE", label:"Closed" },
+  Rejected:             { color:"#B91C1C", bg:"#FEE8E8", label:"Rejected" },
+  Overdue:              { color:"#B91C1C", bg:"#FEE8E8", label:"Overdue" },
+};
+
+const ROLES = ["Master Admin","Management","HOD","Process Dept Rep","User/Employee"];
+const DEPARTMENTS = ["PWS Floor","Admin Interiors-Onepws","WMSPL","CD-Onepws","CR-Onepws","Common-Onepws"];
+const PRODUCT_GROUPS = ["CD-Onepws","CR-Onepws","Admin Interiors-Onepws","Common-Onepws","WMSPL","PWS Floor"];
+const VIOLATION_CATEGORIES = ["Safety Protocol","Process Non-Adherence","Documentation Error","Equipment Misuse","Environmental Non-Compliance","Quality Deviation","Behavioral Issue","Housekeeping Violation","PPE Non-Compliance","Unauthorized Access"];
+const ROOT_CAUSE_CATEGORIES = ["Human Error","Process Gap","Training Deficiency","System/Equipment Failure","Communication Failure","Supervision Gap","Resource Constraint","Design/Engineering Issue","Environmental Factor"];
+const DESIGNATIONS = ["Operator","Sr. Operator","Process Associate","Sr. Process Associate","Team Leader","Supervisor","Assistant Manager","Deputy Manager","Manager","Senior Manager","Deputy General Manager","General Manager","HOD","VP","Director"];
+const CAPA_STATUSES = ["Open","In Progress","Completed","Verified","Overdue"];
+const DISCIPLINARY_MATRIX = {
+  Minor:    ["Verbal Counseling","Written Warning L-1","Written Warning L-2 + Increment Review","Final Warning"],
+  Moderate: ["Written Warning L-1","Written Warning L-2 + Increment Hold","Final Warning","Termination Review"],
+  Major:    ["Written Warning L-2 + Suspension","Final Warning + Increment Hold","Termination Review","Immediate Termination"],
+  Critical: ["Final Warning + Immediate Suspension","Termination Review","Termination Recommendation","Termination"],
+};
+
+// ============================================================
+// STORAGE LAYER (localStorage  swap for Firebase)
+// ============================================================
+const DB = {
+  // Use "pvms2_" prefix (fresh namespace, avoids old corrupt/partial data from v1)
+  get: (key, def=null) => {
+    try {
+      const v = localStorage.getItem("pvms2_" + key);
+      if (v === null || v === undefined) return def;
+      return JSON.parse(v);
+    } catch(e) { return def; }
+  },
+  set: (key, val) => {
+    try { localStorage.setItem("pvms2_" + key, JSON.stringify(val)); } catch(e) { console.error(e); }
+  },
+  genId: (prefix) => `${prefix}-${new Date().getFullYear()}-${String((DB.get("seq_"+prefix, 0)||0)+1).padStart(4,"0")}`,
+  nextSeq: (prefix) => { const n=((DB.get("seq_"+prefix,0)||0)+1); DB.set("seq_"+prefix,n); return n; },
+};
+
+function activeMasterOptions(key, fallback) {
+  return (DB.get(key) || fallback.map((name, i) => ({ id: key + i, name, active: true })))
+    .filter(item => item.active !== false)
+    .map(item => item.name);
+}
+
+// ============================================================
+// SEED DATA
+// ============================================================
+function seedIfEmpty() {
+  if (DB.get("seeded") === true) return;
+  const users = [
+    { id:"u1", empCode:"SYS-001", name:"Master Admin", email:"admin@pws.com", role:"Master Admin", dept:"System", designation:"System Administrator", active:true, complianceScore:100, violations:0 }
+  ];
+  const now = Date.now();
+  const violations = [];
+  const warnings = [];
+  const auditLogs = [];
+  DB.set("users", users);
+  DB.set("violations", violations);
+  DB.set("warnings", warnings);
+  DB.set("auditLogs", auditLogs);
+  DB.set("notifications", []);
+  DB.set("seq_VMS", 0);
+  DB.set("seq_WL", 0);
+  DB.set("seeded", true);  // boolean true
+}
+
+// ============================================================
+// CONTEXTS
+// ============================================================
+const AppContext = createContext(null);
+const useApp = () => useContext(AppContext);
+
+// ============================================================
+// UTILITY COMPONENTS
+// ============================================================
+function Badge({ status, severity, custom }) {
+  let cfg;
+  if (severity) cfg = SEVERITY_CONFIG[severity] ? { color: SEVERITY_CONFIG[severity].color, bg: SEVERITY_CONFIG[severity].bg } : null;
+  else if (status) cfg = STATUS_CONFIG[status];
+  else if (custom) cfg = custom;
+  if (!cfg) return <span style={{fontSize:11,color:"var(--text3)"}}>{status||severity}</span>;
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:10,background:cfg.bg,color:cfg.color,whiteSpace:"nowrap"}}>
+      <span style={{width:5,height:5,borderRadius:"50%",background:cfg.color,display:"inline-block"}}/>
+      {cfg.label||status||severity}
+    </span>
+  );
+}
+
+function Btn({ children, onClick, variant="default", size="md", icon, disabled, loading, style={} }) {
+  const styles = {
+    default: { background:"var(--bg3)", border:"1px solid var(--line)", color:"var(--text2)" },
+    primary: { background:"var(--blue)", border:"1px solid var(--blue)", color:"#fff" },
+    danger:  { background:"var(--red-bg)", border:"1px solid var(--red-bd)", color:"var(--red)" },
+    ghost:   { background:"transparent", border:"1px solid transparent", color:"var(--text3)" },
+    success: { background:"var(--green-bg)", border:"1px solid var(--green-bd)", color:"var(--green)" },
+  };
+  const sizes = { sm:"4px 10px", md:"6px 14px", lg:"8px 20px" };
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled||loading}
+      style={{display:"inline-flex",alignItems:"center",gap:6,padding:sizes[size],borderRadius:"var(--r)",fontWeight:500,fontSize:size==="sm"?12:13,cursor:disabled||loading?"not-allowed":"pointer",opacity:disabled||loading?.6:1,transition:"all .15s",whiteSpace:"nowrap",...styles[variant],...style}}
+    >
+      {loading ? <span className="spinner" style={{width:13,height:13,borderWidth:1.5}}/> : icon}
+      {children}
+    </button>
+  );
+}
+
+function FormGroup({ label, required, children, error }) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+      {label && <label style={{fontSize:11,fontWeight:600,color:"var(--text2)",textTransform:"uppercase",letterSpacing:".04em"}}>{label}{required&&<span style={{color:"var(--red)",marginLeft:2}}>*</span>}</label>}
+      {children}
+      {error && <span style={{fontSize:11,color:"var(--red)"}}>{error}</span>}
+    </div>
+  );
+}
+
+function Input({ value, onChange, placeholder, type="text", style={}, min, max, onKeyDown, onFocus: onFocusProp }) {
+  return <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} min={min} max={max}
+    onKeyDown={onKeyDown}
+    style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"var(--text)",outline:"none",width:"100%",...style}}
+    onFocus={e=>{e.target.style.borderColor="var(--blue)";onFocusProp&&onFocusProp(e);}}
+    onBlur={e=>e.target.style.borderColor="var(--line)"}
+  />;
+}
+
+function Select({ value, onChange, options, placeholder, style={} }) {
+  return (
+    <select value={value||""} onChange={e=>onChange(e.target.value)}
+      style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"7px 28px 7px 10px",fontSize:13,color:value?"var(--text)":"var(--text3)",outline:"none",width:"100%",appearance:"none",backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B7E9A' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 10px center",...style}}
+      onFocus={e=>e.target.style.borderColor="var(--blue)"}
+      onBlur={e=>e.target.style.borderColor="var(--line)"}
+    >
+      {placeholder && <option value="">{placeholder}</option>}
+      {options.map(o => typeof o === "string" ? <option key={o} value={o}>{o}</option> : <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
+function Textarea({ value, onChange, placeholder, rows=3 }) {
+  return <textarea value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows}
+    style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"var(--text)",outline:"none",width:"100%",resize:"vertical",lineHeight:1.5}}
+    onFocus={e=>e.target.style.borderColor="var(--blue)"}
+    onBlur={e=>e.target.style.borderColor="var(--line)"}
+  />;
+}
+
+function Card({ children, style={} }) {
+  return <div style={{background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:"var(--r2)",boxShadow:"var(--sh)",...style}}>{children}</div>;
+}
+
+function CardHeader({ title, subtitle, actions, icon }) {
+  return (
+    <div style={{padding:"14px 18px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        {icon && <span style={{color:"var(--blue)",fontSize:16}}>{icon}</span>}
+        <div>
+          <div style={{fontSize:13.5,fontWeight:600,color:"var(--text)"}}>{title}</div>
+          {subtitle && <div style={{fontSize:11,color:"var(--text3)",marginTop:1}}>{subtitle}</div>}
+        </div>
+      </div>
+      {actions && <div style={{display:"flex",gap:6,alignItems:"center"}}>{actions}</div>}
+    </div>
+  );
+}
+
+function KpiCard({ label, value, sub, color="#1B6EF3", icon, trend, trendDir }) {
+  return (
+    <Card style={{position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:color}}/>
+      <div style={{padding:"14px 16px 12px"}}>
+        <div style={{fontSize:11,fontWeight:500,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
+          {icon && <span>{icon}</span>}{label}
+        </div>
+        <div style={{fontSize:28,fontWeight:700,color:"var(--text)",fontFamily:"var(--mono)",letterSpacing:"-.02em",lineHeight:1}}>{value}</div>
+        {(sub||trend) && (
+          <div style={{fontSize:11,color:"var(--text3)",marginTop:6,display:"flex",alignItems:"center",gap:5}}>
+            {trend && <span style={{display:"inline-flex",alignItems:"center",gap:2,fontSize:11,fontWeight:500,padding:"1px 5px",borderRadius:4,background:trendDir==="up"?"var(--red-bg)":"var(--green-bg)",color:trendDir==="up"?"var(--red)":"var(--green)"}}>{trendDir==="up"?"":""} {trend}</span>}
+            {sub}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function PageHeader({ title, sub, actions }) {
+  return (
+    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:20,gap:12,flexWrap:"wrap"}}>
+      <div>
+        <h1 style={{fontSize:20,fontWeight:700,color:"var(--text)",letterSpacing:"-.02em"}}>{title}</h1>
+        {sub && <p style={{fontSize:13,color:"var(--text3)",marginTop:2}}>{sub}</p>}
+      </div>
+      {actions && <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{actions}</div>}
+    </div>
+  );
+}
+
+function EmptyState({ icon="", title, sub }) {
+  return (
+    <div style={{textAlign:"center",padding:"40px 20px",color:"var(--text3)"}}>
+      <div style={{fontSize:32,marginBottom:8}}>{icon}</div>
+      <div style={{fontWeight:500,color:"var(--text2)",marginBottom:4}}>{title}</div>
+      <div style={{fontSize:12}}>{sub}</div>
+    </div>
+  );
+}
+
+function Avatar({ name, colorIdx }) {
+  const colors = [["#DBEAFE","#1E40AF"],["#FEF3C7","#92400E"],["#F3E8FF","#6B21A8"],["#DCFCE7","#166534"],["#FEE2E2","#991B1B"],["#E0F5F8","#0A6E7A"]];
+  const c = colors[(colorIdx || (name ? name.charCodeAt(0) : 0)) % colors.length];
+  const initials = name ? name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() : "?";
+  return (
+    <div style={{width:28,height:28,borderRadius:"50%",background:c[0],color:c[1],display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0}}>{initials}</div>
+  );
+}
+
+function Pagination({ total, page, perPage, onChange }) {
+  const pages = Math.ceil(total / perPage);
+  if (pages <= 1) return null;
+  const nums = [];
+  for (let i = 1; i <= Math.min(pages, 7); i++) nums.push(i);
+  return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",borderTop:"1px solid var(--line)",fontSize:12,color:"var(--text3)"}}>
+      <span>Showing {Math.min((page-1)*perPage+1,total)}{Math.min(page*perPage,total)} of {total}</span>
+      <div style={{display:"flex",gap:3}}>
+        {nums.map(n => (
+          <button key={n} onClick={()=>onChange(n)} style={{padding:"3px 8px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:n===page?"var(--blue)":"var(--bg3)",color:n===page?"#fff":"var(--text2)",fontFamily:"var(--mono)",fontSize:11,cursor:"pointer"}}>{n}</button>
+        ))}
+        {pages > 7 && <span style={{padding:"3px 6px"}}>{pages}</span>}
+      </div>
+    </div>
+  );
+}
+
+function SearchBar({ value, onChange, placeholder }) {
+  return (
+    <div style={{position:"relative",flex:1,maxWidth:260}}>
+      <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",color:"var(--text3)",fontSize:14,pointerEvents:"none"}}></span>
+      <input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder||"Search"}
+        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"6px 10px 6px 30px",fontSize:12.5,color:"var(--text)",outline:"none"}}
+        onFocus={e=>e.target.style.borderColor="var(--blue)"}
+        onBlur={e=>e.target.style.borderColor="var(--line)"}
+      />
+    </div>
+  );
+}
+
+function Tabs({ tabs, active, onChange }) {
+  return (
+    <div style={{display:"flex",borderBottom:"1px solid var(--line)",marginBottom:16,overflowX:"auto"}}>
+      {tabs.map(t => (
+        <div key={t.key||t} onClick={()=>onChange(t.key||t)}
+          style={{padding:"8px 16px",fontSize:13,fontWeight:500,color:active===(t.key||t)?"var(--blue)":"var(--text3)",borderBottom:`2px solid ${active===(t.key||t)?"var(--blue)":"transparent"}`,cursor:"pointer",marginBottom:-1,whiteSpace:"nowrap",transition:"color .15s"}}
+        >{t.label||t}{t.count!=null&&<span style={{marginLeft:5,fontSize:11,background:"var(--bg2)",color:"var(--text3)",padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>{t.count}</span>}</div>
+      ))}
+    </div>
+  );
+}
+
+// ============================================================
+// TOAST SYSTEM
+// ============================================================
+function ToastContainer({ toasts, dismiss }) {
+  return (
+    <div className="toast-container">
+      {toasts.map(t => (
+        <div key={t.id} className={`toast ${t.type}`} style={{animation:"slideIn .2s ease"}}>
+          <span>{t.type==="success"?"":t.type==="error"?"":t.type==="warning"?"":""}</span>
+          <span style={{flex:1}}>{t.text}</span>
+          <button onClick={()=>dismiss(t.id)} style={{background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:16,lineHeight:1,padding:"0 2px"}}></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============================================================
+// LOGIN PAGE
+// ============================================================
+function LoginPage({ onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const DEMO_CREDS = {
+    "admin@pws.com":   { pwd:"admin123",  role:"Master Admin" },
+    "arvind@pws.com":  { pwd:"mgmt123",   role:"Management" },
+    "ramesh@pws.com":  { pwd:"hod123",    role:"HOD" },
+    "meena@pws.com":   { pwd:"hod123",    role:"HOD" },
+    "anita@pws.com":   { pwd:"rep123",    role:"Process Dept Rep" },
+    "rajesh@pws.com":  { pwd:"user123",   role:"User/Employee" },
+  };
+
+  const handle = () => {
+    setError(""); setLoading(true);
+    setTimeout(() => {
+      // Always seed before login so users table is populated
+      seedIfEmpty();
+      const cred = DEMO_CREDS[email.trim().toLowerCase()];
+      if (!cred || cred.pwd !== password) { setError("Invalid email or password."); setLoading(false); return; }
+      const users = DB.get("users", []);
+      const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      if (!user) { setError("User account not found. Please clear browser storage and reload."); setLoading(false); return; }
+      const logs = DB.get("auditLogs", []);
+      logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"LOGIN", entity:"-", detail:"Successful login", ip:"192.168.1."+Math.floor(Math.random()*50+10) });
+      DB.set("auditLogs", logs);
+      onLogin(user);
+    }, 600);
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg, #0D1B2A 0%, #1B3A6B 100%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{width:"100%",maxWidth:420}}>
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <img src={LOGO_SRC} alt="ONEPWS Logo" style={{width:220,height:"auto",marginBottom:14,borderRadius:8}}/>
+          <p style={{fontSize:13,color:"rgba(255,255,255,.6)",marginTop:4,fontWeight:500}}>Process Violation Management System</p>
+          <p style={{fontSize:10.5,color:"var(--text3)",marginTop:3,letterSpacing:".03em"}}>{ISO_CERTS}</p>
+        </div>
+
+        {/* Card */}
+        <div style={{background:"rgba(255,255,255,.97)",borderRadius:14,boxShadow:"0 20px 60px rgba(0,0,0,.35)",padding:32}}>
+          <h2 style={{fontSize:16,fontWeight:600,color:"var(--text)",marginBottom:20}}>Sign in to your account</h2>
+
+          {error && <div style={{background:"var(--red-bg)",border:"1px solid var(--red-bd)",borderRadius:"var(--r)",padding:"8px 12px",color:"var(--red)",fontSize:13,marginBottom:16}}>{error}</div>}
+
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <FormGroup label="Email Address" required>
+              <Input type="email" value={email} onChange={setEmail} placeholder="your@email.com"/>
+            </FormGroup>
+            <FormGroup label="Password" required>
+              <div style={{position:"relative"}}>
+                <Input type={showPwd?"text":"password"} value={password} onChange={setPassword} placeholder="" style={{paddingRight:36}}/>
+                <button onClick={()=>setShowPwd(!showPwd)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:14}}>{showPwd?"Hide":"Show"}</button>
+              </div>
+            </FormGroup>
+            <Btn variant="primary" onClick={handle} loading={loading} style={{width:"100%",justifyContent:"center",padding:"9px 0",fontSize:14}}>Sign In</Btn>
+          </div></div>
+
+        <p style={{textAlign:"center",color:"var(--text3)",fontSize:11,marginTop:16}}>{ISO_CERTS}</p>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SIDEBAR
+// ============================================================
+function Sidebar({ active, setPage, user, notifCount }) {
+  const can = (roles) => roles.includes(user.role);
+  const navItems = [
+    { id:"dashboard", label:"Dashboard", icon:"DB", section:"Overview", roles:ROLES },
+    { id:"cases",     label:"All Cases",  icon:"CA", section:"Case Management", roles:ROLES },
+    { id:"newcase",   label:"Register Violation", icon:"CA", section:"Case Management", roles:ROLES },
+    { id:"investigation", label:"Investigation & CAPA", icon:"SR", section:"Case Management", roles:["Master Admin","Management","HOD","Process Dept Rep"] },
+    { id:"disciplinary",  label:"Disciplinary Actions", icon:"DS", section:"Disciplinary", roles:["Master Admin","Management","HOD"] },
+    { id:"warning",       label:"Warning Letters", icon:"DS", section:"Disciplinary", roles:["Master Admin","Management","HOD"] },
+    { id:"reports",       label:"Reports & MIS", icon:"AN", section:"Analytics", roles:["Master Admin","Management","HOD"] },
+    { id:"employees",     label:"Employee Compliance", icon:"AN", section:"Analytics", roles:["Master Admin","Management","HOD"] },
+    { id:"masters",       label:"Master Data", icon:"AD", section:"Administration", roles:["Master Admin"] },
+    { id:"email",         label:"Email Integration", icon:"EM", section:"Administration", roles:["Master Admin"] },
+    { id:"audit",         label:"Audit Trail", icon:"LK", section:"Administration", roles:["Master Admin","Management"] },
+    { id:"users",         label:"User Management", icon:"AD", section:"Administration", roles:["Master Admin"] },
+  ];
+  const sections = [...new Set(navItems.map(n=>n.section))];
+
+  const [collapsed, setCollapsed] = useState(false);
+  const w = collapsed ? 52 : 232;
+
+  return (
+    <nav style={{width:w,background:"#fff",borderRight:"1px solid var(--line)",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",overflowX:"hidden",transition:"width .2s ease",height:"100vh",position:"relative"}}>
+      {/* Logo */}
+      <div style={{padding:"10px 10px 10px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",gap:8,flexShrink:0,minHeight:50}}>
+        {collapsed ? (
+          /* Collapsed: Red chevron ">" badge  matches ONEPWS logo mark */
+          <div style={{width:32,height:32,background:"#CC1E1E",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,cursor:"pointer"}} onClick={()=>setCollapsed(false)}>
+            <span style={{color:"#fff",fontSize:18,fontWeight:900,lineHeight:1}}></span>
+          </div>
+        ) : (
+          /* Expanded: Custom ONEPWS text logo in black/red to match brand */
+          <div style={{display:"flex",alignItems:"center",gap:0,flexShrink:0}}>
+            <span style={{fontSize:16,fontWeight:900,color:"var(--text)",letterSpacing:"-.01em",fontFamily:"var(--font)"}}>ONE</span>
+            <div style={{width:22,height:22,background:"linear-gradient(135deg,#CC1E1E,#991010)",borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 2px"}}>
+              <span style={{color:"#fff",fontSize:14,fontWeight:900,lineHeight:1}}></span>
+            </div>
+            <span style={{fontSize:16,fontWeight:900,color:"var(--text)",letterSpacing:"-.01em",fontFamily:"var(--font)"}}>PWS</span>
+          </div>
+        )}
+        {/* Toggle button  always visible */}
+        <button onClick={()=>setCollapsed(!collapsed)}
+          style={{marginLeft:"auto",width:24,height:24,background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:4,color:"var(--text3)",cursor:"pointer",fontSize:14,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",transition:"background .15s"}}
+          onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"}
+          onMouseLeave={e=>e.currentTarget.style.background="var(--bg3)"}
+          title={collapsed?"Expand sidebar":"Collapse sidebar"}
+        >{collapsed?"":""}</button>
+      </div>
+
+      {/* Nav */}
+      <div style={{flex:1,paddingTop:8}}>
+        {sections.map(section => {
+          const items = navItems.filter(n => n.section === section && can(n.roles));
+          if (!items.length) return null;
+          return (
+            <div key={section}>
+              {!collapsed && <div style={{fontSize:10,fontWeight:600,letterSpacing:".1em",color:"var(--text3)",padding:"6px 14px 3px",textTransform:"uppercase"}}>{section}</div>}
+              {items.map(item => (
+                <div key={item.id} onClick={()=>setPage(item.id)}
+                  title={collapsed?item.label:""}
+                  style={{display:"flex",alignItems:"center",gap:9,padding:`7px ${collapsed?"11px":"14px"}`,cursor:"pointer",transition:"background .12s",color:active===item.id?"var(--blue)":"var(--text2)",borderLeft:`2px solid ${active===item.id?"var(--blue)":"transparent"}`,background:active===item.id?"var(--blue-l)":"transparent",fontSize:13,fontWeight:active===item.id?500:400}}
+                  onMouseEnter={e=>{if(active!==item.id)e.currentTarget.style.background="var(--bg)"}}
+                  onMouseLeave={e=>{if(active!==item.id)e.currentTarget.style.background="transparent"}}
+                >
+                  <span style={{fontSize:14,flexShrink:0}}>{item.icon}</span>
+                  {!collapsed && <span style={{whiteSpace:"nowrap",overflow:"hidden",flex:1}}>{item.label}</span>}
+                  {!collapsed && item.id==="investigation" && <span style={{marginLeft:"auto",background:"#D97706",color:"#fff",fontSize:10,fontWeight:600,padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>5</span>}
+                  {!collapsed && item.id==="cases" && <span style={{marginLeft:"auto",background:"var(--red)",color:"#fff",fontSize:10,fontWeight:600,padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>8</span>}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer */}
+      <div style={{padding:"12px 14px",borderTop:"1px solid var(--line)",flexShrink:0}}>
+        {!collapsed ? (
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <Avatar name={user.name}/>
+            <div style={{overflow:"hidden",flex:1}}>
+              <div style={{fontSize:12,color:"var(--text)",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.name}</div>
+              <div style={{fontSize:10,color:"var(--text3)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.role}</div>
+            </div>
+          </div>
+        ) : <Avatar name={user.name}/>}
+      </div>
+    </nav>
+  );
+}
+
+// ============================================================
+// TOPBAR
+// ============================================================
+function Topbar({ page, user, notifications, setPage, onLogout }) {
+  const [showNotif, setShowNotif] = useState(false);
+  const [notifs, setNotifs] = useState(notifications);
+  const unread = notifs.filter(n=>!n.read).length;
+  const BREADCRUMBS = {
+    dashboard:"PVMS / Dashboard",cases:"PVMS / Case Management / All Cases",newcase:"PVMS / Case Management / Register Violation",investigation:"PVMS / Case Management / Investigation & CAPA",disciplinary:"PVMS / Disciplinary / Actions",warning:"PVMS / Disciplinary / Warning Letters",reports:"PVMS / Analytics / Reports & MIS",employees:"PVMS / Analytics / Employee Compliance",masters:"PVMS / Administration / Master Data",email:"PVMS / Administration / Email Integration",audit:"PVMS / Administration / Audit Trail",users:"PVMS / Administration / User Management"
+  };
+  const bc = (BREADCRUMBS[page]||"PVMS").split(" / ");
+
+  const markAll = () => {
+    const updated = notifs.map(n=>({...n,read:true}));
+    setNotifs(updated);
+    DB.set("notifications", updated);
+  };
+
+  return (
+    <div style={{background:"var(--bg3)",borderBottom:"1px solid var(--line)",padding:"0 20px",height:50,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,position:"relative",zIndex:100}}>
+      <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"var(--text3)"}}>
+        {bc.map((s,i)=>(
+          <span key={i} style={{display:"flex",alignItems:"center",gap:5}}>
+            {i>0&&<span style={{color:"var(--line2)"}}></span>}
+            <span style={{color:i===bc.length-1?"var(--text)":"var(--text3)",fontWeight:i===bc.length-1?500:400}}>{s}</span>
+          </span>
+        ))}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <Btn onClick={()=>setPage("newcase")} variant="primary" size="sm" icon="">New Case</Btn>
+        <div style={{position:"relative"}}>
+          <button onClick={()=>setShowNotif(!showNotif)} style={{width:34,height:34,border:"1px solid var(--line)",borderRadius:"var(--r)",background:"var(--bg3)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,position:"relative",color:"var(--text3)"}}>
+            
+            {unread>0 && <span style={{position:"absolute",top:4,right:4,width:9,height:9,background:"var(--red)",borderRadius:"50%",border:"2px solid var(--bg3)"}}/>}
+          </button>
+          {showNotif && (
+            <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,width:320,background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:var_r2,boxShadow:"var(--sh2)",zIndex:200}} onClick={e=>e.stopPropagation()}>
+              <div style={{padding:"12px 14px",borderBottom:"1px solid var(--line)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontWeight:600,fontSize:13}}>Notifications {unread>0&&<span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"1px 5px",borderRadius:8}}>+{unread}</span>}</span>
+                <button onClick={markAll} style={{fontSize:11,color:"var(--blue)",background:"none",border:"none",cursor:"pointer"}}>Mark all read</button>
+              </div>
+              {notifs.slice(0,6).map(n=>(
+                <div key={n.id} style={{padding:"10px 14px",borderBottom:"1px solid var(--line)",background:n.read?"var(--bg3)":"var(--blue-l)",display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <span style={{fontSize:14}}>{n.type==="critical"?"":n.type==="warning"?"":n.type==="success"?"":""}</span>
+                  <div><div style={{fontSize:12,color:"var(--text)",fontWeight:n.read?400:500}}>{n.text}</div><div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>{new Date(n.ts).toLocaleString("en-IN",{dateStyle:"short",timeStyle:"short"})}</div></div>
+                </div>
+              ))}
+              <div style={{padding:"8px 14px",fontSize:11,color:"var(--text3)",textAlign:"center"}}>End of notifications</div>
+            </div>
+          )}
+        </div>
+        <button onClick={onLogout} style={{fontSize:12,color:"var(--text3)",background:"none",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"5px 10px",cursor:"pointer"}}>Sign Out</button>
+        {showNotif && <div style={{position:"fixed",inset:0,zIndex:150}} onClick={()=>setShowNotif(false)}/>}
+      </div>
+    </div>
+  );
+}
+const var_r2 = "var(--r2)";
+
+// ============================================================
+// DASHBOARD PAGE
+// ============================================================
+function DashboardPage({ user, setPage }) {
+  const violations = DB.get("violations",[]);
+  const users = DB.get("users",[]);
+
+  const total = violations.length;
+  const open = violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length;
+  const closed = violations.filter(v=>v.status==="Closed").length;
+  const overdue = violations.filter(v=>{
+    if(["Closed","Rejected"].includes(v.status)) return false;
+    return v.dueDate && new Date(v.dueDate) < new Date();
+  }).length;
+  const critical = violations.filter(v=>v.severity==="Critical"&&v.status!=="Closed").length;
+  const repeats = violations.filter(v=>v.repeatViolation).length;
+  const capaPending = violations.filter(v=>v.status==="CAPA Pending"||v.status==="Verification Pending").length;
+  const avgScore = users.filter(u=>u.role==="User/Employee").reduce((a,b)=>a+b.complianceScore,0) / Math.max(users.filter(u=>u.role==="User/Employee").length,1);
+
+  const deptCounts = {};
+  DEPARTMENTS.forEach(d=>{deptCounts[d]=violations.filter(v=>v.dept===d).length});
+  const maxDept = Math.max(...Object.values(deptCounts),1);
+
+  const catCounts = {};
+  violations.forEach(v=>{catCounts[v.category]=(catCounts[v.category]||0)+1});
+  const topCats = Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  const sevCounts = {Minor:0,Moderate:0,Major:0,Critical:0};
+  violations.forEach(v=>{if(sevCounts[v.severity]!==undefined)sevCounts[v.severity]++});
+
+  const monthCounts = Array(6).fill(0);
+  const now = new Date();
+  violations.forEach(v=>{
+    const diff = (now - new Date(v.date)) / (1000*60*60*24*30);
+    if(diff >= 0 && diff < 6) monthCounts[5-Math.floor(diff)]++;
+  });
+
+  const monthLabels = Array(6).fill(0).map((_,i)=>{
+    const d = new Date();
+    d.setMonth(d.getMonth()-(5-i));
+    return d.toLocaleString("default",{month:"short"});
+  });
+
+  const recentCases = violations.slice(-5).reverse();
+
+  return (
+    <div>
+      <PageHeader title="Compliance Overview"
+        sub={`Real-time analytics  ${ISO_CERTS}`}
+        actions={
+          <>
+            <Btn size="sm" icon="" onClick={()=>exportDashboardPDF(violations, users)}>Export PDF</Btn>
+            <Btn variant="primary" size="sm" onClick={()=>setPage("newcase")} icon="">Register Case</Btn>
+          </>
+        }
+      />
+
+      {/* KPI Row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
+        <KpiCard label="Total Violations" value={total} color="var(--blue)" trend="8%" trendDir="up" sub="this period"/>
+        <KpiCard label="Open Cases" value={open} color="var(--red)" trend={`${open} active`} trendDir="up"/>
+        <KpiCard label="Overdue CAPA" value={overdue} color="#D97706" sub="past due date"/>
+        <KpiCard label="Closed Cases" value={closed} color="var(--green)" sub={`${Math.round(closed/Math.max(total,1)*100)}% closure rate`}/>
+        <KpiCard label="Critical (Active)" value={critical} color="var(--red)" sub="require immediate action"/>
+        <KpiCard label="Repeat Violations" value={repeats} color="#EA580C" sub="across all depts"/>
+        <KpiCard label="CAPA Pending" value={capaPending} color="var(--purple)" sub="actions pending"/>
+        <KpiCard label="Org Avg Score" value={Math.round(avgScore)} color="var(--cyan)" sub="compliance score"/>
+      </div>
+
+      {/* Row 2 */}
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16,marginBottom:16}}>
+        {/* Dept bar chart */}
+        <Card>
+          <CardHeader title="Department-wise Violations" actions={<Btn size="sm" ghost onClick={()=>setPage("reports")}>Full Report </Btn>}/>
+          <div style={{padding:16}}>
+            {DEPARTMENTS.map(d=>(
+              <div key={d} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                <div style={{fontSize:12,color:"var(--text2)",width:160,flexShrink:0,textAlign:"right"}}>{d}</div>
+                <div style={{flex:1,height:8,background:"var(--bg2)",borderRadius:4,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${deptCounts[d]/maxDept*100}%`,background:"var(--blue)",borderRadius:4,transition:"width .5s"}}/>
+                </div>
+                <div style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",width:24,textAlign:"right"}}>{deptCounts[d]}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Severity donut */}
+        <Card>
+          <CardHeader title="By Severity"/>
+          <div style={{padding:16,display:"flex",flexDirection:"column",gap:10}}>
+            {Object.entries(sevCounts).map(([s,c])=>(
+              <div key={s} style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:10,height:10,borderRadius:"50%",background:SEVERITY_CONFIG[s].color,flexShrink:0}}/>
+                <span style={{flex:1,fontSize:13}}>{s}</span>
+                <div style={{width:80,height:6,background:"var(--bg2)",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${c/Math.max(total,1)*100}%`,background:SEVERITY_CONFIG[s].color}}/>
+                </div>
+                <span style={{fontSize:12,fontFamily:"var(--mono)",color:"var(--text3)",width:20,textAlign:"right"}}>{c}</span>
+              </div>
+            ))}
+            <div style={{borderTop:"1px solid var(--line)",paddingTop:10,fontSize:12,color:"var(--text3)"}}>
+              Risk deductions: Minor 2  Moderate 5  Major 15  Critical 40
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Row 3 */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+        {/* Monthly bar */}
+        <Card>
+          <CardHeader title="6-Month Trend"/>
+          <div style={{padding:16}}>
+            <div style={{display:"flex",alignItems:"flex-end",gap:8,height:100}}>
+              {monthCounts.map((v,i)=>(
+                <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                  <div style={{width:"100%",height:`${Math.max(v/Math.max(...monthCounts,1)*80,4)}px`,background:i===5?"var(--blue)":"var(--line2)",borderRadius:"3px 3px 0 0",transition:"height .4s",minHeight:4}}/>
+                  <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--mono)"}}>{monthLabels[i]}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+
+        {/* Top categories */}
+        <Card>
+          <CardHeader title="Top Violation Categories"/>
+          <div style={{padding:16}}>
+            {topCats.map(([cat,cnt],i)=>(
+              <div key={cat} style={{display:"flex",alignItems:"center",gap:10,marginBottom:9}}>
+                <span style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",width:14}}>{i+1}</span>
+                <span style={{flex:1,fontSize:12,color:"var(--text2)"}}>{cat}</span>
+                <div style={{width:80,height:6,background:"var(--bg2)",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${cnt/Math.max(topCats[0][1],1)*100}%`,background:"var(--blue)",borderRadius:3}}/>
+                </div>
+                <span style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",width:20,textAlign:"right"}}>{cnt}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* Recent Cases */}
+      <Card>
+        <CardHeader title="Recent Cases" actions={<Btn size="sm" ghost onClick={()=>setPage("cases")}>View All </Btn>}/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["Case ID","Date","Employee","Department","Category","Severity","Status"].map(h=>(
+                  <th key={h} style={{padding:"8px 14px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {recentCases.map(v=>(
+                <tr key={v.id} style={{borderBottom:"1px solid var(--line)",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                  <td style={{padding:"10px 14px",fontFamily:"var(--mono)",fontSize:11,color:"var(--blue)",fontWeight:500}}>{v.id}</td>
+                  <td style={{padding:"10px 14px",fontSize:11,color:"var(--text3)"}}>{v.date}</td>
+                  <td style={{padding:"10px 14px"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Avatar name={v.empName}/><span style={{fontSize:12.5}}>{v.empName}</span></div></td>
+                  <td style={{padding:"10px 14px",fontSize:12,color:"var(--text3)"}}>{v.dept}</td>
+                  <td style={{padding:"10px 14px"}}><span style={{fontSize:11,background:"var(--bg2)",color:"var(--text2)",padding:"2px 7px",borderRadius:4,border:"1px solid var(--line)"}}>{v.category}</span></td>
+                  <td style={{padding:"10px 14px"}}><Badge severity={v.severity}/></td>
+                  <td style={{padding:"10px 14px"}}><Badge status={v.status}/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// CASES LIST PAGE
+// ============================================================
+function CasesPage({ user, setPage, setEditId, toast }) {
+  const [violations, setViolations] = useState(DB.get("violations",[]));
+  const [search, setSearch] = useState("");
+  const [filterDept, setFilterDept] = useState("");
+  const [filterSev, setFilterSev] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterTab, setFilterTab] = useState("All");
+  const [page, setPageNum] = useState(1);
+  const PER = 8;
+
+  const tabs = [
+    {key:"All",label:"All",count:violations.length},
+    {key:"Open",label:"Open"},
+    {key:"Under Investigation",label:"Investigating"},
+    {key:"CAPA Pending",label:"CAPA Pending"},
+    {key:"Overdue",label:"Overdue"},
+    {key:"Closed",label:"Closed"},
+  ];
+
+  let filtered = violations.filter(v => {
+    if (filterTab === "Overdue") {
+      const ov = v.dueDate && new Date(v.dueDate) < new Date() && !["Closed","Rejected"].includes(v.status);
+      if (!ov) return false;
+    } else if (filterTab !== "All") {
+      if (v.status !== filterTab) return false;
+    }
+    if (filterDept && v.dept !== filterDept) return false;
+    if (filterSev && v.severity !== filterSev) return false;
+    if (filterStatus && v.status !== filterStatus) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return v.id.toLowerCase().includes(q) || v.empName.toLowerCase().includes(q) || v.category.toLowerCase().includes(q) || v.dept.toLowerCase().includes(q);
+    }
+    return true;
+  }).sort((a,b)=>b.caseNo-a.caseNo);
+
+  const paged = filtered.slice((page-1)*PER, page*PER);
+
+  const canApprove = ["Master Admin","HOD","Management"].includes(user.role);
+
+  const updateStatus = (id, status) => {
+    const vs = DB.get("violations",[]);
+    const idx = vs.findIndex(v=>v.id===id);
+    if (idx >= 0) {
+      vs[idx].status = status;
+      vs[idx].auditLog = vs[idx].auditLog || [];
+      vs[idx].auditLog.push({ action:`Status${status}`, by:user.name, at:Date.now() });
+      DB.set("violations", vs);
+      setViolations([...vs]);
+      toast(`Case ${id} status updated to ${status}`, "success");
+    }
+  };
+
+  const softDelete = (id) => {
+    if (!window.confirm("Archive this case? It will not be deleted permanently.")) return;
+    updateStatus(id, "Archived");
+  };
+
+  const exportExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const rows = [["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","HOD","Due Date","Repeat","Risk Score"]];
+    filtered.forEach(v=>rows.push([v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.assignedHOD||"",v.dueDate||"",v.repeatViolation?"Yes":"No",v.riskScore]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Cases");
+    XLSX.writeFile(wb, "PVMS_Cases_Export.xlsx");
+    toast("Excel export ready", "success");
+  };
+
+  return (
+    <div>
+      <PageHeader title="All Cases" sub={`${violations.length} total violations  ${violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length} open`}
+        actions={
+          <>
+            <Btn size="sm" icon="" onClick={exportExcel}>Export Excel</Btn>
+            <Btn variant="primary" size="sm" onClick={()=>setPage("newcase")} icon="">New Case</Btn>
+          </>
+        }
+      />
+
+      <Tabs tabs={tabs} active={filterTab} onChange={t=>{setFilterTab(t);setPageNum(1)}}/>
+
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:14}}>
+        <SearchBar value={search} onChange={v=>{setSearch(v);setPageNum(1)}} placeholder="Search case ID, employee, category"/>
+        <Select value={filterDept} onChange={v=>{setFilterDept(v);setPageNum(1)}} options={activeMasterOptions("masterDepts", DEPARTMENTS)} placeholder="All Departments" style={{flex:"none",width:"auto"}}/>
+        <Select value={filterSev} onChange={v=>{setFilterSev(v);setPageNum(1)}} options={["Minor","Moderate","Major","Critical"]} placeholder="All Severity" style={{flex:"none",width:"auto"}}/>
+        {(search||filterDept||filterSev) && <Btn size="sm" ghost onClick={()=>{setSearch("");setFilterDept("");setFilterSev("");}}>Clear</Btn>}
+        <span style={{fontSize:12,color:"var(--text3)",marginLeft:"auto"}}>{filtered.length} results</span>
+      </div>
+
+      <Card>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["Case ID","Date","Employee","Dept","Category","Severity","Repeat","Status","Due Date","Actions"].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {paged.length === 0 && (
+                <tr><td colSpan={10}><EmptyState icon="" title="No cases found" sub="Try changing your search or filters"/></td></tr>
+              )}
+              {paged.map(v=>{
+                const isOverdue = v.dueDate && new Date(v.dueDate) < new Date() && !["Closed","Rejected"].includes(v.status);
+                return (
+                  <tr key={v.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:"var(--blue)",fontWeight:500,whiteSpace:"nowrap"}}>{v.id}</td>
+                    <td style={{padding:"9px 12px",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>{v.date}</td>
+                    <td style={{padding:"9px 12px"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Avatar name={v.empName}/><div><div style={{fontSize:12.5,fontWeight:500}}>{v.empName}</div><div style={{fontSize:10,color:"var(--text3)"}}>{v.empCode}</div></div></div></td>
+                    <td style={{padding:"9px 12px",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>{v.dept}</td>
+                    <td style={{padding:"9px 12px"}}><span style={{fontSize:11,background:"var(--bg2)",color:"var(--text2)",padding:"2px 6px",borderRadius:4,border:"1px solid var(--line)",whiteSpace:"nowrap"}}>{v.category}</span></td>
+                    <td style={{padding:"9px 12px"}}><Badge severity={v.severity}/></td>
+                    <td style={{padding:"9px 12px",textAlign:"center"}}>{v.repeatViolation&&<span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"2px 6px",borderRadius:4,fontWeight:500}}> Repeat</span>}</td>
+                    <td style={{padding:"9px 12px"}}><Badge status={isOverdue?"Overdue":v.status}/></td>
+                    <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:isOverdue?"var(--red)":"var(--text3)",whiteSpace:"nowrap"}}>{v.dueDate||""}</td>
+                    <td style={{padding:"9px 12px"}}>
+                      <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
+                        {canApprove && v.status==="Submitted" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Approve</Btn>}
+                        {canApprove && v.status==="Submitted" && <Btn size="sm" variant="danger" onClick={()=>updateStatus(v.id,"Rejected")}>Reject</Btn>}
+                        {canApprove && v.status==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Closed")}>Close</Btn>}
+                        <Btn size="sm" ghost onClick={()=>{setEditId(v.id);setPage("viewcase")}}>View</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <Pagination total={filtered.length} page={page} perPage={PER} onChange={setPageNum}/>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// CASE FORM PAGE (New + Edit)
+// ============================================================
+function CaseFormPage({ user, toast, setPage, editId }) {
+  const isEdit = !!editId;
+  const existing = isEdit ? DB.get("violations",[]).find(v=>v.id===editId) : null;
+
+  const [form, setForm] = useState({
+    date: new Date().toISOString().slice(0,10),
+    dept: "", empName:"", empCode:"", designation:"",
+    productGroups:[], category:"", severity:"Minor",
+    description:"", sopViolated:"", rootCause:"",
+    immediateAction:"", cctvRef:"", witnesses:"",
+    riskScore:"", repeatViolation:false,
+    assignedInvestigator:"", assignedHOD:"",
+    dueDate:"", notes:"",
+    ...(existing||{}),
+  });
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [repeatAlert, setRepeatAlert] = useState(null);
+
+  const users = DB.get("users",[]);
+  const activeMasters = (key, fallback) => (DB.get(key) || fallback.map((name,i)=>({id:key+i,name,active:true}))).filter(x=>x.active!==false).map(x=>x.name);
+  const activeDepts = activeMasters("masterDepts", DEPARTMENTS);
+  const activeCats = activeMasters("masterCats", VIOLATION_CATEGORIES);
+  const activeRCs = activeMasters("masterRCs", ROOT_CAUSE_CATEGORIES);
+  const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
+  const employees = users.filter(u=>u.role==="User/Employee"||u.role==="Process Dept Rep");
+
+  const set = (k, v) => setForm(f=>({...f,[k]:v}));
+
+  const checkRepeat = (empId) => {
+    const violations = DB.get("violations",[]);
+    const prev = violations.filter(v=>v.empId===empId);
+    if (prev.length > 0) {
+      setRepeatAlert({ count:prev.length, last:prev[prev.length-1] });
+      set("repeatViolation", true);
+    } else {
+      setRepeatAlert(null);
+      set("repeatViolation", false);
+    }
+  };
+
+  const selectEmployee = (empId) => {
+    const emp = users.find(u=>u.id===empId);
+    if (emp) {
+      set("empId", emp.id); set("empName", emp.name); set("empCode", emp.empCode);
+      set("designation", emp.designation); set("dept", emp.dept);
+      const hod = hods.find(h=>h.dept===emp.dept);
+      if (hod) set("assignedHOD", hod.name);
+      checkRepeat(emp.id);
+    }
+  };
+
+  const validate = () => {
+    const e = {};
+    if (!form.date) e.date = "Required";
+    if (!form.dept) e.dept = "Required";
+    if (!form.empName) e.empName = "Required";
+    if (!form.category) e.category = "Required";
+    if (!form.severity) e.severity = "Required";
+    if (!form.description || form.description.length < 10) e.description = "Please provide a detailed description (min 10 chars)";
+    if (!form.rootCause) e.rootCause = "Required";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const submit = (isDraft) => {
+    if (!isDraft && !validate()) { toast("Please fill all required fields", "error"); return; }
+    setSaving(true);
+    setTimeout(() => {
+      const violations = DB.get("violations",[]);
+      const sevScore = SEVERITY_CONFIG[form.severity]?.score || 0;
+      if (isEdit) {
+        const idx = violations.findIndex(v=>v.id===editId);
+        violations[idx] = { ...violations[idx], ...form, updatedBy:user.name, updatedAt:Date.now() };
+        DB.set("violations", violations);
+        toast(`Case ${editId} updated`, "success");
+      } else {
+        DB.nextSeq("VMS");
+        const id = DB.genId("VMS");
+        const newCase = { id, caseNo:DB.get("seq_VMS",1), ...form,
+          status: isDraft ? "Draft" : "Submitted",
+          createdBy: user.id, createdAt: Date.now(),
+          capaActions:[], fiveWhy:[], auditLog:[{action:"Case Created",by:user.name,at:Date.now()}]
+        };
+        violations.push(newCase);
+        DB.set("violations", violations);
+        // update employee score
+        if (form.empId && !isDraft) {
+          const us = DB.get("users",[]);
+          const ui = us.findIndex(u=>u.id===form.empId);
+          if (ui>=0) { us[ui].complianceScore = Math.max(0, (us[ui].complianceScore||100)+sevScore); us[ui].violations=(us[ui].violations||0)+1; DB.set("users",us); }
+        }
+        toast(isDraft ? "Draft saved" : `Case ${id} submitted for review`, "success");
+      }
+      setSaving(false);
+      setPage("cases");
+    }, 600);
+  };
+
+  const toggleProductGroup = (g) => {
+    const cur = form.productGroups || [];
+    set("productGroups", cur.includes(g) ? cur.filter(x=>x!==g) : [...cur, g]);
+  };
+
+  return (
+    <div>
+      <PageHeader title={isEdit?"Edit Case":"Register New Violation"} sub={isEdit?`Editing ${editId}`:"Fields marked * are mandatory  Case ID auto-generated on submission"}
+        actions={
+          <>
+            <Btn size="sm" onClick={()=>setPage("cases")}>Cancel</Btn>
+            {!isEdit && <Btn size="sm" onClick={()=>submit(true)} loading={saving}>Save Draft</Btn>}
+            <Btn variant="primary" size="sm" onClick={()=>submit(false)} loading={saving}>{isEdit?"Save Changes":"Submit for Approval"}</Btn>
+          </>
+        }
+      />
+
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
+        {/* LEFT */}
+        <div>
+          <Card style={{marginBottom:16}}>
+            <CardHeader title="Case Information" actions={!isEdit&&<span style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",background:"var(--bg2)",padding:"2px 8px",borderRadius:4}}>ID: Auto-generated</span>}/>
+            <div style={{padding:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <FormGroup label="Date of Incident" required error={errors.date}>
+                <Input type="date" value={form.date} onChange={v=>set("date",v)}/>
+              </FormGroup>
+              <FormGroup label="Department" required error={errors.dept}>
+                <Select value={form.dept} onChange={v=>set("dept",v)} options={activeDepts} placeholder="Select department"/>
+              </FormGroup>
+              <FormGroup label="Employee Name" required error={errors.empName}>
+                <Select value={form.empId||""} onChange={selectEmployee} options={[...employees.map(e=>({value:e.id,label:`${e.name} (${e.empCode})`})),{value:"other",label:"Other / External"}]} placeholder="Search employee"/>
+              </FormGroup>
+              <FormGroup label="Employee Code">
+                <Input value={form.empCode} onChange={v=>set("empCode",v)} placeholder="Auto-filled on selection"/>
+              </FormGroup>
+              <FormGroup label="Designation">
+                <Input value={form.designation} onChange={v=>set("designation",v)} placeholder="Auto-filled on selection"/>
+              </FormGroup>
+              <FormGroup label="Product Group(s)">
+                <div style={{display:"flex",flexWrap:"wrap",gap:5,padding:"6px 0"}}>
+                  {PRODUCT_GROUPS.map(g=>{
+                    const sel = (form.productGroups||[]).includes(g);
+                    return <button key={g} onClick={()=>toggleProductGroup(g)} style={{padding:"3px 10px",borderRadius:10,border:`1px solid ${sel?"var(--blue)":"var(--line)"}`,background:sel?"var(--blue-l)":"var(--bg)",color:sel?"var(--blue)":"var(--text3)",fontSize:11,fontWeight:500,cursor:"pointer",transition:"all .15s"}}>{g}</button>;
+                  })}
+                </div>
+              </FormGroup>
+            </div>
+          </Card>
+
+          <Card style={{marginBottom:16}}>
+            <CardHeader title="Violation Details"/>
+            <div style={{padding:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <FormGroup label="Violation Category" required error={errors.category}>
+                <Select value={form.category} onChange={v=>set("category",v)} options={activeCats} placeholder="Select category"/>
+              </FormGroup>
+              <FormGroup label="SOP / Policy Violated">
+                <Input value={form.sopViolated} onChange={v=>set("sopViolated",v)} placeholder="e.g. SOP-QMS-007 Clause 4.2"/>
+              </FormGroup>
+              <div style={{gridColumn:"1/-1"}}>
+                <FormGroup label="Incident Description" required error={errors.description}>
+                  <Textarea value={form.description} onChange={v=>set("description",v)} placeholder="Describe the process compliance violation in detail" rows={4}/>
+                </FormGroup>
+              </div>
+              <div style={{gridColumn:"1/-1"}}>
+                <FormGroup label="Severity Level" required error={errors.severity}>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",paddingTop:4}}>
+                    {["Minor","Moderate","Major","Critical"].map(s=>{
+                      const cfg = SEVERITY_CONFIG[s];
+                      const sel = form.severity===s;
+                      return <button key={s} onClick={()=>set("severity",s)} style={{padding:"5px 16px",borderRadius:10,border:`1px solid ${sel?cfg.bd:vars("--line")}`,background:sel?cfg.bg:"var(--bg)",color:sel?cfg.color:"var(--text3)",fontWeight:sel?600:400,fontSize:12,cursor:"pointer",transition:"all .15s"}}>{s}</button>;
+                    })}
+                  </div>
+                  {form.severity && <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Score deduction: <strong style={{color:SEVERITY_CONFIG[form.severity].color}}>{SEVERITY_CONFIG[form.severity].score} pts</strong></div>}
+                </FormGroup>
+              </div>
+              <FormGroup label="Root Cause Category" required error={errors.rootCause}>
+                <Select value={form.rootCause} onChange={v=>set("rootCause",v)} options={activeRCs} placeholder="Select root cause"/>
+              </FormGroup>
+              <FormGroup label="Risk Score (110)">
+                <Input type="number" value={form.riskScore} onChange={v=>set("riskScore",v)} min="1" max="10" placeholder="110"/>
+              </FormGroup>
+              <FormGroup label="Immediate Action Taken">
+                <Textarea value={form.immediateAction} onChange={v=>set("immediateAction",v)} placeholder="Describe action taken immediately after incident" rows={2}/>
+              </FormGroup>
+              <FormGroup label="CCTV Reference">
+                <Input value={form.cctvRef} onChange={v=>set("cctvRef",v)} placeholder="Camera ID / Timestamp (if applicable)"/>
+              </FormGroup>
+              <FormGroup label="Witness Details">
+                <Input value={form.witnesses} onChange={v=>set("witnesses",v)} placeholder="Name and designation of witness(es)"/>
+              </FormGroup>
+              <FormGroup label="Additional Notes">
+                <Textarea value={form.notes} onChange={v=>set("notes",v)} placeholder="Any additional context" rows={2}/>
+              </FormGroup>
+            </div>
+          </Card>
+        </div>
+
+        {/* RIGHT */}
+        <div>
+          {/* Repeat Alert */}
+          {repeatAlert && (
+            <div style={{background:"var(--amber-bg)",border:"1px solid var(--amber-bd)",borderRadius:"var(--r2)",padding:"12px 14px",marginBottom:14,fontSize:12,color:"var(--amber)"}}>
+              <div style={{fontWeight:600,marginBottom:4}}> Repeat Violation Alert</div>
+              <div>{form.empName} has <strong>{repeatAlert.count}</strong> prior violation(s) on record.</div>
+              <div style={{marginTop:4,fontSize:11,color:"var(--amber)"}}>Last: {repeatAlert.last.id}  {repeatAlert.last.severity}  {repeatAlert.last.date}</div>
+              <div style={{marginTop:6,fontWeight:600,fontSize:11,color:"var(--red)"}}>Suggested action: {DISCIPLINARY_MATRIX[form.severity]?.[Math.min(repeatAlert.count,3)]||"Escalate"}</div>
+            </div>
+          )}
+
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Repeat Violation"/>
+            <div style={{padding:14}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13}}>
+                <input type="checkbox" checked={form.repeatViolation} onChange={e=>set("repeatViolation",e.target.checked)} style={{width:15,height:15}}/>
+                Mark as repeat violation
+              </label>
+            </div>
+          </Card>
+
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Assignment"/>
+            <div style={{padding:14,display:"flex",flexDirection:"column",gap:10}}>
+              <FormGroup label="Assigned HOD">
+                <Select value={form.assignedHOD} onChange={v=>set("assignedHOD",v)} options={hods.map(h=>h.name)} placeholder="Auto-assign by dept"/>
+              </FormGroup>
+              <FormGroup label="Assigned Investigator">
+                <Select value={form.assignedInvestigator} onChange={v=>set("assignedInvestigator",v)} options={hods.map(h=>h.name)} placeholder="Select investigator"/>
+              </FormGroup>
+              <FormGroup label="Investigation Due Date">
+                <Input type="date" value={form.dueDate} onChange={v=>set("dueDate",v)}/>
+              </FormGroup>
+            </div>
+          </Card>
+
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Evidence Upload"/>
+            <div style={{padding:14}}>
+              <div style={{border:"1.5px dashed var(--line2)",borderRadius:"var(--r2)",padding:18,textAlign:"center",color:"var(--text3)",cursor:"pointer"}}
+                onClick={()=>toast("File upload requires Firebase Storage integration","info")}>
+                <div style={{fontSize:24,marginBottom:6}}></div>
+                <div style={{fontSize:12,fontWeight:500,color:"var(--text2)"}}>Drop files or click to upload</div>
+                <div style={{fontSize:11,marginTop:2}}>PDF, JPEG, PNG, MP4  Max 20MB</div>
+                <div style={{fontSize:10,marginTop:6,color:"var(--blue)"}}>Requires Firebase Storage</div>
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="Workflow"/>
+            <div style={{padding:14}}>
+              {["Case Created","HOD Review","Investigation","CAPA & Closure"].map((s,i)=>(
+                <div key={s} style={{display:"flex",gap:10,paddingBottom:i<3?12:0,position:"relative"}}>
+                  {i<3&&<div style={{position:"absolute",left:11,top:22,bottom:0,width:1,background:"var(--line)"}}/>}
+                  <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,background:i===0?"var(--green-bg)":"var(--bg2)",color:i===0?"var(--green)":"var(--text3)",border:`1px solid ${i===0?"var(--green-bd)":"var(--line)"}`}}>{i===0?"":i+1}</div>
+                  <div style={{paddingTop:2}}><div style={{fontSize:12.5,fontWeight:500,color:i===0?"var(--text)":"var(--text3)"}}>{s}</div><div style={{fontSize:11,color:"var(--text3)"}}>{i===0?"On submission":i===1?"Awaiting approval":i===2?"After HOD approval":"After investigation"}</div></div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+function vars(v){return v}
+
+// ============================================================
+// VIEW CASE PAGE
+// ============================================================
+function ViewCasePage({ user, toast, setPage, editId }) {
+  const [violations, setViolations] = useState(DB.get("violations",[]));
+  const violation = violations.find(v=>v.id===editId);
+
+  if (!violation) return <EmptyState icon="" title="Case not found" sub="This case may have been removed"/>;
+
+  const [fiveWhy, setFiveWhy] = useState(violation.fiveWhy?.length ? violation.fiveWhy : ["","","","",""]);
+  const [newCapa, setNewCapa] = useState({type:"Corrective",description:"",owner:"",dueDate:"",status:"Open"});
+  const [showCapaForm, setShowCapaForm] = useState(false);
+  const [investigatorRemarks, setInvestigatorRemarks] = useState(violation.investigatorRemarks||"");
+
+  const canEdit = ["Master Admin","HOD","Management"].includes(user.role);
+  const users = DB.get("users",[]);
+  const activeMasters = (key, fallback) => (DB.get(key) || fallback.map((name,i)=>({id:key+i,name,active:true}))).filter(x=>x.active!==false).map(x=>x.name);
+  const activeDepts = activeMasters("masterDepts", DEPARTMENTS);
+  const activeCats = activeMasters("masterCats", VIOLATION_CATEGORIES);
+  const activeRCs = activeMasters("masterRCs", ROOT_CAUSE_CATEGORIES);
+  const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
+
+  const updateCase = (updates) => {
+    const vs = DB.get("violations",[]);
+    const idx = vs.findIndex(v=>v.id===editId);
+    if (idx>=0) {
+      vs[idx] = {...vs[idx],...updates};
+      DB.set("violations",vs);
+      setViolations([...vs]);
+    }
+  };
+
+  const saveFiveWhy = () => {
+    updateCase({fiveWhy, investigatorRemarks});
+    toast("5-Why analysis saved","success");
+  };
+
+  const addCapa = () => {
+    if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
+    const action = {...newCapa, id:"ca"+Date.now()};
+    const updated = [...(violation.capaActions||[]), action];
+    updateCase({capaActions:updated});
+    setNewCapa({type:"Corrective",description:"",owner:"",dueDate:"",status:"Open"});
+    setShowCapaForm(false);
+    toast("CAPA action added","success");
+  };
+
+  const changeStatus = (status) => {
+    const log = violation.auditLog||[];
+    log.push({action:`Status${status}`,by:user.name,at:Date.now()});
+    updateCase({status, auditLog:log});
+    if(status==="Verification Pending") toast("Case moved to Verification Pending","success");
+    if(status==="Closed") toast("Case closed successfully","success");
+    if(status==="CAPA Pending") toast("Case moved to CAPA Pending","success");
+  };
+
+  const sev = SEVERITY_CONFIG[violation.severity]||{};
+
+  return (
+    <div>
+      <PageHeader
+        title={violation.id}
+        sub={`${violation.category}  ${violation.dept}  ${violation.date}`}
+        actions={
+          <>
+            <Btn size="sm" onClick={()=>setPage("cases")}> Back</Btn>
+            {canEdit && violation.status==="Submitted" && <Btn size="sm" variant="success" onClick={()=>changeStatus("Under Investigation")}>Approve  Investigate</Btn>}
+            {canEdit && violation.status==="Under Investigation" && <Btn size="sm" variant="primary" onClick={()=>changeStatus("CAPA Pending")}>Move to CAPA</Btn>}
+            {canEdit && violation.status==="CAPA Pending" && <Btn size="sm" variant="primary" onClick={()=>changeStatus("Verification Pending")}>Submit for Verification</Btn>}
+            {canEdit && violation.status==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>changeStatus("Closed")}>Close Case</Btn>}
+            {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
+          </>
+        }
+      />
+
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
+        <div>
+          {/* Details */}
+          <Card style={{marginBottom:16}}>
+            <CardHeader title="Case Details"
+              actions={<>
+                <Badge severity={violation.severity}/>
+                <Badge status={violation.status}/>
+                {violation.repeatViolation && <span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"2px 8px",borderRadius:10,fontWeight:600}}> Repeat</span>}
+              </>}
+            />
+            <div style={{padding:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {[
+                ["Employee",<div style={{display:"flex",alignItems:"center",gap:7}}><Avatar name={violation.empName}/><div><div style={{fontWeight:500}}>{violation.empName}</div><div style={{fontSize:11,color:"var(--text3)"}}>{violation.empCode}  {violation.designation}</div></div></div>],
+                ["Department",violation.dept],
+                ["Date",violation.date],
+                ["Category",violation.category],
+                ["SOP Violated",violation.sopViolated||""],
+                ["Root Cause",violation.rootCause],
+                ["Risk Score",violation.riskScore ? <span style={{fontFamily:"var(--mono)",fontWeight:600,color:violation.riskScore>=8?"var(--red)":violation.riskScore>=5?"var(--amber)":"var(--green)"}}>{violation.riskScore}/10</span>:""],
+                ["Due Date",<span style={{color:violation.dueDate&&new Date(violation.dueDate)<new Date()&&violation.status!=="Closed"?"var(--red)":"var(--text)"}}>{violation.dueDate||""}</span>],
+                ["Product Groups",(violation.productGroups||[]).join(", ")||""],
+                ["Assigned HOD",violation.assignedHOD||""],
+              ].map(([k,v])=>(
+                <div key={k}><div style={{fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:3}}>{k}</div><div style={{fontSize:13,color:"var(--text)"}}>{v}</div></div>
+              ))}
+              <div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:4}}>Description</div><div style={{fontSize:13,color:"var(--text)",background:"var(--bg)",padding:10,borderRadius:"var(--r)",lineHeight:1.6,border:"1px solid var(--line)"}}>{violation.description}</div></div>
+              {violation.immediateAction && <div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:4}}>Immediate Action Taken</div><div style={{fontSize:13,color:"var(--text)",background:"var(--green-bg)",padding:10,borderRadius:"var(--r)",border:"1px solid var(--green-bd)"}}>{violation.immediateAction}</div></div>}
+              {violation.witnesses && <div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:4}}>Witnesses</div><div style={{fontSize:13,color:"var(--text)"}}>{violation.witnesses}</div></div>}
+            </div>
+          </Card>
+
+          {/* 5-Why */}
+          <Card style={{marginBottom:16}}>
+            <CardHeader title="5-Why Root Cause Analysis"
+              actions={canEdit&&<Btn size="sm" variant="primary" onClick={saveFiveWhy}>Save</Btn>}
+            />
+            <div style={{padding:16,display:"flex",flexDirection:"column",gap:10}}>
+              {fiveWhy.map((w,i)=>(
+                <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <div style={{width:28,height:28,borderRadius:"50%",background:"var(--blue-l)",color:"var(--blue)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0,marginTop:5}}>W{i+1}</div>
+                  <Textarea value={w} onChange={v=>{const n=[...fiveWhy];n[i]=v;setFiveWhy(n)}} placeholder={`Why ${i+1}: ${["Why did the violation occur?","Why was the SOP not followed?","Why was awareness/training insufficient?","Why was this not caught by the system?","Why does the root gap exist?"][i]}`} rows={1}/>
+                </div>
+              ))}
+              <FormGroup label="Investigator Remarks / Final Root Cause">
+                <Textarea value={investigatorRemarks} onChange={setInvestigatorRemarks} placeholder="Final determination of root cause and investigator's summary" rows={3}/>
+              </FormGroup>
+            </div>
+          </Card>
+
+          {/* CAPA */}
+          <Card>
+            <CardHeader title="CAPA Actions"
+              actions={canEdit&&<Btn size="sm" variant="primary" onClick={()=>setShowCapaForm(!showCapaForm)}>+ Add Action</Btn>}
+            />
+            {showCapaForm && (
+              <div style={{padding:14,borderBottom:"1px solid var(--line)",background:"var(--bg)"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <FormGroup label="Type"><Select value={newCapa.type} onChange={v=>setNewCapa(f=>({...f,type:v}))} options={["Corrective","Preventive","System","HR Action"]} placeholder="Select type"/></FormGroup>
+                  <FormGroup label="Owner"><Select value={newCapa.owner} onChange={v=>setNewCapa(f=>({...f,owner:v}))} options={hods.map(h=>h.name)} placeholder="Assign to"/></FormGroup>
+                  <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
+                  <FormGroup label="Due Date"><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
+                  <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={CAPA_STATUSES}/></FormGroup>
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:10,justifyContent:"flex-end"}}>
+                  <Btn size="sm" onClick={()=>setShowCapaForm(false)}>Cancel</Btn>
+                  <Btn size="sm" variant="primary" onClick={addCapa}>Add Action</Btn>
+                </div>
+              </div>
+            )}
+            <div style={{padding:violation.capaActions?.length?0:14}}>
+              {!violation.capaActions?.length && <EmptyState icon="" title="No CAPA actions yet" sub="Add corrective and preventive actions"/>}
+              {violation.capaActions?.map((ca,i)=>(
+                <div key={ca.id} style={{padding:"12px 16px",borderBottom:i<violation.capaActions.length-1?"1px solid var(--line)":"none"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                        <span style={{fontSize:11,fontWeight:600,background:"var(--bg2)",color:"var(--text2)",padding:"2px 7px",borderRadius:4}}>{ca.type}</span>
+                        <span style={{fontSize:11,color:ca.status==="Completed"||ca.status==="Verified"?"var(--green)":ca.status==="Overdue"?"var(--red)":"var(--amber)",fontWeight:500}}>{ca.status}</span>
+                      </div>
+                      <div style={{fontSize:13,color:"var(--text)",marginBottom:4}}>{ca.description}</div>
+                      <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {ca.owner||"Unassigned"}  Due: {ca.dueDate||""}</div>
+                    </div>
+                    {canEdit && (
+                      <Select value={ca.status} onChange={v=>{const updated=[...violation.capaActions];updated[i]={...updated[i],status:v};updateCase({capaActions:updated});}} options={CAPA_STATUSES} style={{width:130}}/>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        {/* RIGHT */}
+        <div>
+          {/* Timeline */}
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Case Timeline"/>
+            <div style={{padding:14}}>
+              {(violation.auditLog||[{action:"Case Created",by:violation.createdBy||"System",at:violation.createdAt}]).map((entry,i,arr)=>(
+                <div key={i} style={{display:"flex",gap:10,paddingBottom:i<arr.length-1?12:0,position:"relative"}}>
+                  {i<arr.length-1 && <div style={{position:"absolute",left:11,top:22,bottom:0,width:1,background:"var(--line)"}}/>}
+                  <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,background:"var(--blue-l)",color:"var(--blue)",fontWeight:600}}>{i+1}</div>
+                  <div style={{paddingTop:2}}><div style={{fontSize:12,fontWeight:500}}>{entry.action}</div><div style={{fontSize:11,color:"var(--text3)"}}>{entry.by}  {entry.at ? new Date(entry.at).toLocaleString("en-IN",{dateStyle:"short",timeStyle:"short"}) : ""}</div></div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Disciplinary Suggestion */}
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Disciplinary Recommendation"/>
+            <div style={{padding:14}}>
+              {(() => {
+                const emp = DB.get("users",[]).find(u=>u.id===violation.empId);
+                const prevCount = DB.get("violations",[]).filter(v=>v.empId===violation.empId&&v.id!==violation.id&&v.status==="Closed").length;
+                const action = DISCIPLINARY_MATRIX[violation.severity]?.[Math.min(prevCount,3)];
+                return (
+                  <div>
+                    <div style={{fontSize:11,color:"var(--text3)",marginBottom:6}}>Based on severity ({violation.severity}) and prior violations ({prevCount}):</div>
+                    <div style={{background:sev.bg,border:`1px solid ${sev.bd}`,borderRadius:"var(--r)",padding:"8px 12px",color:sev.color,fontWeight:600,fontSize:13,marginBottom:8}}>{action||"Refer to HR"}</div>
+                    {emp && <div style={{fontSize:11,color:"var(--text3)"}}>Employee compliance score: <strong style={{color:emp.complianceScore>70?"var(--green)":emp.complianceScore>50?"var(--amber)":"var(--red)"}}>{emp.complianceScore}/100</strong></div>}
+                  </div>
+                );
+              })()}
+            </div>
+          </Card>
+
+          {/* Generate Warning */}
+          {canEdit && (
+            <Card>
+              <CardHeader title="Warning Letter"/>
+              <div style={{padding:14}}>
+                <div style={{fontSize:12,color:"var(--text2)",marginBottom:10}}>Generate a formal warning letter for this violation.</div>
+                <Btn variant="primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>{
+                  const violations = DB.get("violations",[]);
+                  const v = violations.find(x=>x.id===editId);
+                  if(v) generateWarningPDF(v, user, toast);
+                }}> Generate Warning Letter PDF</Btn>
+              </div>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// INVESTIGATION PAGE
+// ============================================================
+function InvestigationPage({ user, toast, setPage, setEditId }) {
+  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Under Investigation","CAPA Pending","Verification Pending","Submitted"].includes(v.status)));
+
+  return (
+    <div>
+      <PageHeader title="Investigation & CAPA Tracker" sub={`${violations.length} active cases requiring attention`}/>
+      {violations.length===0 && <EmptyState icon="" title="All caught up!" sub="No cases currently under investigation"/>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {violations.map(v=>(
+          <Card key={v.id}>
+            <div style={{padding:"12px 16px",borderBottom:"1px solid var(--line)",background:"var(--bg)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:600,color:"var(--blue)",fontFamily:"var(--mono)"}}>{v.id}</div>
+                  <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>{v.empName}  {v.dept}  {v.category}</div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <Badge severity={v.severity}/>
+                  <Badge status={v.status}/>
+                </div>
+              </div>
+              {v.dueDate && <div style={{fontSize:11,marginTop:4,color:new Date(v.dueDate)<new Date()?"var(--red)":"var(--text3)"}}>Due: {v.dueDate} {new Date(v.dueDate)<new Date()&&" OVERDUE"}</div>}
+            </div>
+            <div style={{padding:"10px 16px"}}>
+              <div style={{fontSize:12,color:"var(--text2)",marginBottom:10,lineHeight:1.5}}>{v.description?.slice(0,120)}{v.description?.length>120&&""}</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <Btn size="sm" variant="primary" onClick={()=>{setEditId(v.id);setPage("viewcase")}}>Open Case </Btn>
+                {v.capaActions?.length>0 && <span style={{fontSize:11,color:"var(--text3)",alignSelf:"center"}}>{v.capaActions.length} CAPA action(s)</span>}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DISCIPLINARY PAGE
+// ============================================================
+function DisciplinaryPage({ user, toast }) {
+  const employees = DB.get("users",[]).filter(u=>u.role==="User/Employee");
+  const violations = DB.get("violations",[]);
+
+  const getHistory = (empId) => violations.filter(v=>v.empId===empId);
+
+  return (
+    <div>
+      <PageHeader title="Disciplinary Management" sub="Configurable disciplinary matrix  Auto-suggestion based on severity and repeat count"/>
+
+      <Card style={{marginBottom:16}}>
+        <CardHeader title="Disciplinary Matrix (Configurable)" subtitle="Master Admin can modify this matrix"/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                <th style={{padding:"9px 14px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)"}}>Severity</th>
+                {["1st Occurrence","2nd Occurrence","3rd Occurrence","4th+ Occurrence"].map(h=>(
+                  <th key={h} style={{padding:"9px 14px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(DISCIPLINARY_MATRIX).map(([sev,actions])=>(
+                <tr key={sev} style={{borderBottom:"1px solid var(--line)"}}>
+                  <td style={{padding:"10px 14px"}}><Badge severity={sev}/></td>
+                  {actions.map((a,i)=>(
+                    <td key={i} style={{padding:"10px 14px",fontSize:12.5,color:"var(--text2)"}}>{a}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader title="Employee Disciplinary Status"/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["Employee","Department","Total Violations","Active Warnings","Score","Suggested Action"].map(h=>(
+                  <th key={h} style={{padding:"9px 14px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {employees.sort((a,b)=>a.complianceScore-b.complianceScore).map(emp=>{
+                const hist = getHistory(emp.id);
+                const warnings = DB.get("warnings",[]).filter(w=>w.empId===emp.id);
+                const lastSev = hist.length ? hist[hist.length-1].severity : null;
+                const suggested = lastSev ? DISCIPLINARY_MATRIX[lastSev]?.[Math.min(hist.length-1,3)] : "";
+                return (
+                  <tr key={emp.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
+                    <td style={{padding:"10px 14px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><Avatar name={emp.name}/><div><div style={{fontSize:13,fontWeight:500}}>{emp.name}</div><div style={{fontSize:11,color:"var(--text3)"}}>{emp.empCode}</div></div></div></td>
+                    <td style={{padding:"10px 14px",fontSize:12,color:"var(--text3)"}}>{emp.dept}</td>
+                    <td style={{padding:"10px 14px",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,color:hist.length>3?"var(--red)":hist.length>1?"var(--amber)":"var(--text)"}}>{hist.length}</td>
+                    <td style={{padding:"10px 14px",fontFamily:"var(--mono)",color:warnings.length>0?"var(--red)":"var(--green)",fontWeight:600}}>{warnings.length}</td>
+                    <td style={{padding:"10px 14px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{width:60,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${emp.complianceScore}%`,background:emp.complianceScore>80?"var(--green)":emp.complianceScore>60?"#D97706":"var(--red)"}}/></div>
+                        <span style={{fontSize:12,fontFamily:"var(--mono)",fontWeight:600,color:emp.complianceScore>80?"var(--green)":emp.complianceScore>60?"var(--amber)":"var(--red)"}}>{emp.complianceScore}</span>
+                      </div>
+                    </td>
+                    <td style={{padding:"10px 14px",fontSize:12,color:"var(--text2)"}}>{hist.length?suggested:""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// WARNING LETTERS PAGE
+// ============================================================
+function WarningLettersPage({ user, toast, setPage, setEditId }) {
+  const [warnings, setWarnings] = useState(DB.get("warnings",[]));
+  const [showNew, setShowNew] = useState(false);
+  const [selectedCase, setSelectedCase] = useState("");
+  const [letterType, setLetterType] = useState("Warning Letter Level-1");
+  const [issuer, setIssuer] = useState("HOD + HR Manager");
+
+  const closedCases = DB.get("violations",[]).filter(v=>v.status!=="Draft"&&v.warningIssued!==true||v.status==="CAPA Pending"||v.status==="Under Investigation");
+  const allViolations = DB.get("violations",[]);
+
+  const generateLetter = () => {
+    const violation = allViolations.find(v=>v.id===selectedCase);
+    if (!violation) { toast("Please select a case","error"); return; }
+    generateWarningPDF(violation, user, toast, letterType);
+    const newW = {
+      id:"WL-"+Date.now(), caseId:violation.id, empId:violation.empId, empName:violation.empName,
+      empCode:violation.empCode, dept:violation.dept, designation:violation.designation,
+      violationDate:violation.date, letterDate:new Date().toISOString().slice(0,10),
+      letterType, severity:violation.severity, sopViolated:violation.sopViolated,
+      category:violation.category, description:violation.description,
+      disciplinaryAction:DISCIPLINARY_MATRIX[violation.severity]?.[0]||"Formal Warning",
+      corrective:"Strict adherence to all applicable SOPs and company policies.",
+      issuedBy:issuer, status:"Issued", createdAt:Date.now()
+    };
+    const ws = DB.get("warnings",[]);
+    ws.push(newW);
+    DB.set("warnings",ws);
+    setWarnings([...ws]);
+    setShowNew(false);
+    toast("Warning letter generated & saved","success");
+  };
+
+  return (
+    <div>
+      <PageHeader title="Warning Letters" sub={`${warnings.length} letters issued  Professional PDF generation`}
+        actions={
+          <>
+            <Btn variant="primary" size="sm" onClick={()=>setShowNew(!showNew)}> Generate New Letter</Btn>
+          </>
+        }
+      />
+
+      {showNew && (
+        <Card style={{marginBottom:16}}>
+          <CardHeader title="Generate Warning Letter"/>
+          <div style={{padding:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <FormGroup label="Case Reference" required>
+              <Select value={selectedCase} onChange={setSelectedCase} options={allViolations.filter(v=>v.status!=="Draft").map(v=>({value:v.id,label:`${v.id}  ${v.empName} (${v.severity})`}))} placeholder="Select case"/>
+            </FormGroup>
+            <FormGroup label="Letter Type">
+              <Select value={letterType} onChange={setLetterType} options={["Warning Letter Level-1","Warning Letter Level-2","Final Warning Letter","Show-Cause Notice","Increment Hold Notice"]}/>
+            </FormGroup>
+            <FormGroup label="Issuing Authority">
+              <Select value={issuer} onChange={setIssuer} options={["HOD + HR Manager","GM Operations","CHRO + HOD","Management Committee"]}/>
+            </FormGroup>
+            <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+              <Btn variant="primary" onClick={generateLetter}> Generate & Download PDF</Btn>
+              <Btn onClick={()=>setShowNew(false)}>Cancel</Btn>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader title="Issued Warning Letters"/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["Letter ID","Date","Employee","Dept","Case Ref","Type","Severity","Status","Actions"].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {warnings.length===0 && <tr><td colSpan={9}><EmptyState icon="" title="No warning letters yet" sub="Generate letters from cases above"/></td></tr>}
+              {warnings.map(w=>(
+                <tr key={w.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
+                  <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:"var(--purple)",fontWeight:500}}>{w.id}</td>
+                  <td style={{padding:"9px 12px",fontSize:11,color:"var(--text3)"}}>{w.letterDate}</td>
+                  <td style={{padding:"9px 12px"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Avatar name={w.empName}/><div><div style={{fontSize:12.5,fontWeight:500}}>{w.empName}</div><div style={{fontSize:10,color:"var(--text3)"}}>{w.empCode}</div></div></div></td>
+                  <td style={{padding:"9px 12px",fontSize:11,color:"var(--text3)"}}>{w.dept}</td>
+                  <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:"var(--blue)"}}>{w.caseId}</td>
+                  <td style={{padding:"9px 12px",fontSize:12}}>{w.letterType}</td>
+                  <td style={{padding:"9px 12px"}}><Badge severity={w.severity}/></td>
+                  <td style={{padding:"9px 12px"}}><span style={{fontSize:11,background:"var(--green-bg)",color:"var(--green)",padding:"2px 8px",borderRadius:10,fontWeight:500}}> {w.status}</span></td>
+                  <td style={{padding:"9px 12px"}}>
+                    <Btn size="sm" variant="primary" onClick={()=>{
+                      const v = allViolations.find(x=>x.id===w.caseId);
+                      if(v) generateWarningPDF(v, user, toast, w.letterType);
+                    }}> PDF</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// REPORTS PAGE
+// ============================================================
+function ReportsPage({ user, toast }) {
+  const violations = DB.get("violations",[]);
+  const users = DB.get("users",[]).filter(u=>u.role==="User/Employee");
+
+  const deptStats = DEPARTMENTS.map(d=>{
+    const vs = violations.filter(v=>v.dept===d);
+    const closed = vs.filter(v=>v.status==="Closed").length;
+    const open = vs.filter(v=>!["Closed","Rejected"].includes(v.status)).length;
+    const ov = vs.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length;
+    const avgScore = users.filter(u=>u.dept===d).reduce((a,b)=>a+b.complianceScore,0)/Math.max(users.filter(u=>u.dept===d).length,1);
+    return { dept:d, total:vs.length, closed, open, overdue:ov, avgScore:Math.round(avgScore)||100 };
+  });
+
+  const exportMIS = () => {
+    const wb = XLSX.utils.book_new();
+    const summary = [["PVMS Monthly MIS Report",COMPANY_NAME],[`Generated: ${new Date().toLocaleDateString("en-IN")}`,``],[""],["Department","Total","Open","Closed","Overdue","Avg Score"],...deptStats.map(d=>[d.dept,d.total,d.open,d.closed,d.overdue,d.avgScore]),[""],["All Violations"],["Case ID","Date","Employee","Dept","Category","Severity","Status"],...violations.map(v=>[v.id,v.date,v.empName,v.dept,v.category,v.severity,v.status])];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "MIS Report");
+    XLSX.writeFile(wb, `PVMS_MIS_${new Date().toISOString().slice(0,7)}.xlsx`);
+    toast("MIS Excel exported","success");
+  };
+
+  const exportBulk = () => {
+    if(user.role!=="Master Admin"){toast("Only Master Admin can bulk export","error");return;}
+    const wb = XLSX.utils.book_new();
+    const vRows=[["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","Repeat","Risk","Due Date","Description"],...violations.map(v=>[v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.repeatViolation?"Yes":"No",v.riskScore,v.dueDate,v.description])];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(vRows), "All Cases");
+    const uRows=[["Name","Emp Code","Dept","Role","Score","Violations"],...DB.get("users",[]).map(u=>[u.name,u.empCode,u.dept,u.role,u.complianceScore,u.violations])];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(uRows), "Employees");
+    const wRows=[["Letter ID","Date","Employee","Dept","Case Ref","Type","Severity"],...DB.get("warnings",[]).map(w=>[w.id,w.letterDate,w.empName,w.dept,w.caseId,w.letterType,w.severity])];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wRows), "Warning Letters");
+    XLSX.writeFile(wb, `PVMS_BulkExport_${new Date().toISOString().slice(0,10)}.xlsx`);
+    toast("Bulk data export complete","success");
+  };
+
+  const downloadTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const rows=[["PVMS Import Template  Fill and upload"],[""],["Case ID (leave blank)","Date (YYYY-MM-DD)","Department","Employee Name","Employee Code","Designation","Category","Severity","Description","SOP Violated","Root Cause","Immediate Action","Risk Score (1-10)","Repeat (Yes/No)","Status"],...Array(5).fill(["","","","","","","","Minor","","","","","","No","Submitted"])];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Import Template");
+    XLSX.writeFile(wb, "PVMS_Import_Template.xlsx");
+    toast("Import template downloaded","success");
+  };
+
+  return (
+    <div>
+      <PageHeader title="Reports & MIS"
+        sub="Monthly Management Information System  ISO compliance reporting"
+        actions={
+          <>
+            <Btn size="sm" onClick={exportMIS} icon="">Export MIS Excel</Btn>
+            {user.role==="Master Admin" && <Btn variant="primary" size="sm" onClick={exportBulk} icon="">Bulk Export All Data</Btn>}
+          </>
+        }
+      />
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        <KpiCard label="Total Violations" value={violations.length} color="var(--blue)"/>
+        <KpiCard label="Closed Cases" value={violations.filter(v=>v.status==="Closed").length} color="var(--green)" sub={`${Math.round(violations.filter(v=>v.status==="Closed").length/Math.max(violations.length,1)*100)}% closure rate`}/>
+        <KpiCard label="CAPA Pending" value={violations.filter(v=>v.status==="CAPA Pending").length} color="var(--amber)"/>
+        <KpiCard label="Overdue" value={violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length} color="var(--red)"/>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
+        <Card>
+          <CardHeader title="Department Compliance Summary"/>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{background:"var(--bg)"}}>
+                  {["Department","Total","Open","Closed","Overdue","Avg Score"].map(h=>(
+                    <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {deptStats.map(d=>(
+                  <tr key={d.dept} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
+                    <td style={{padding:"10px 12px",fontWeight:500,fontSize:13}}>{d.dept}</td>
+                    <td style={{padding:"10px 12px",fontFamily:"var(--mono)",fontSize:13}}>{d.total}</td>
+                    <td style={{padding:"10px 12px"}}><Badge status={d.open>0?"Open":"Closed"}/></td>
+                    <td style={{padding:"10px 12px",fontFamily:"var(--mono)"}}>{d.closed}</td>
+                    <td style={{padding:"10px 12px"}}>{d.overdue>0?<span style={{color:"var(--red)",fontWeight:600,fontFamily:"var(--mono)"}}>{d.overdue}</span>:<span style={{color:"var(--green)"}}>0</span>}</td>
+                    <td style={{padding:"10px 12px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{width:50,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${d.avgScore}%`,background:d.avgScore>85?"var(--green)":d.avgScore>70?"#D97706":"var(--red)"}}/></div>
+                        <span style={{fontSize:12,fontFamily:"var(--mono)",fontWeight:600,color:d.avgScore>85?"var(--green)":d.avgScore>70?"var(--amber)":"var(--red)"}}>{d.avgScore}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Import / Export Data"/>
+          <div style={{padding:14}}>
+            <div style={{border:"1.5px dashed var(--line2)",borderRadius:"var(--r2)",padding:14,textAlign:"center",marginBottom:12}}>
+              <div style={{fontSize:13,fontWeight:500,color:"var(--text2)",marginBottom:4}}>Import Existing Cases</div>
+              <div style={{fontSize:11,color:"var(--text3)",marginBottom:10}}>Download template, fill and upload to the system</div>
+              <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+                <Btn size="sm" onClick={downloadTemplate}> Download Template</Btn>
+                <Btn size="sm" variant="primary" onClick={()=>toast("Upload requires Firebase integration","info")}> Upload Data</Btn>
+              </div>
+            </div>
+            <div style={{background:"var(--bg)",borderRadius:"var(--r2)",padding:12}}>
+              <div style={{fontSize:12,fontWeight:600,color:"var(--text)",marginBottom:8}}>Quick Exports</div>
+              {[["MIS Report (Excel)","",exportMIS],["Import Template","",downloadTemplate],["Bulk Export (Admin Only)","",exportBulk]].map(([n,icon,fn])=>(
+                <div key={n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid var(--line)"}}>
+                  <span style={{fontSize:12,color:"var(--text2)"}}>{n}</span>
+                  <Btn size="sm" onClick={fn}>{icon} Export</Btn>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// EMPLOYEE COMPLIANCE PAGE
+// ============================================================
+function EmployeesPage({ user }) {
+  const [users] = useState(DB.get("users",[]).filter(u=>u.role==="User/Employee"||u.role==="Process Dept Rep"));
+  const violations = DB.get("violations",[]);
+  const warnings = DB.get("warnings",[]);
+
+  const scoreColor = (s) => s > 85 ? "var(--green)" : s > 65 ? "#D97706" : "var(--red)";
+  const scoreBg = (s) => s > 85 ? "var(--green-bg)" : s > 65 ? "var(--amber-bg)" : "var(--red-bg)";
+  const orgAvg = Math.round(users.reduce((a,b)=>a+b.complianceScore,0)/Math.max(users.length,1));
+
+  return (
+    <div>
+      <PageHeader title="Employee Compliance Scores" sub="Scores start at 100  Minor 2  Moderate 5  Major 15  Critical 40"/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        <KpiCard label="Org Avg Score" value={orgAvg} color="var(--green)" sub="/100"/>
+        <KpiCard label="At-Risk (< 60)" value={users.filter(u=>u.complianceScore<60).length} color="var(--red)"/>
+        <KpiCard label="Repeat Offenders" value={users.filter(u=>u.violations>1).length} color="var(--amber)"/>
+        <KpiCard label="Perfect Score" value={users.filter(u=>u.complianceScore===100).length} color="var(--blue)" sub="(100/100)"/>
+      </div>
+
+      <Card>
+        <CardHeader title="Employee Compliance Leaderboard" subtitle="Sorted by compliance score (lowest first)"/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["#","Employee","Dept","Designation","Violations","Active Warnings","Compliance Score","Risk Level"].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[...users].sort((a,b)=>a.complianceScore-b.complianceScore).map((emp,i)=>{
+                const empViol = violations.filter(v=>v.empId===emp.id);
+                const empWarn = warnings.filter(w=>w.empId===emp.id);
+                return (
+                  <tr key={emp.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
+                    <td style={{padding:"10px 12px",fontSize:12,fontFamily:"var(--mono)",color:i<3?"var(--red)":"var(--text3)",fontWeight:i<3?700:400}}>{i<3?"":i+1}</td>
+                    <td style={{padding:"10px 12px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><Avatar name={emp.name}/><div><div style={{fontSize:13,fontWeight:500}}>{emp.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{emp.empCode}</div></div></div></td>
+                    <td style={{padding:"10px 12px",fontSize:12,color:"var(--text3)"}}>{emp.dept}</td>
+                    <td style={{padding:"10px 12px",fontSize:12}}>{emp.designation}</td>
+                    <td style={{padding:"10px 12px",fontFamily:"var(--mono)",fontWeight:600,color:empViol.length>3?"var(--red)":empViol.length>1?"var(--amber)":"var(--green)"}}>{empViol.length}</td>
+                    <td style={{padding:"10px 12px"}}>{empWarn.length>0?<span style={{fontSize:12,fontWeight:700,color:"var(--red)"}}>{empWarn.length} warning(s)</span>:<span style={{fontSize:12,color:"var(--green)"}}>None</span>}</td>
+                    <td style={{padding:"10px 12px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{width:70,height:6,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${emp.complianceScore}%`,background:scoreColor(emp.complianceScore)}}/></div>
+                        <span style={{fontSize:13,fontFamily:"var(--mono)",fontWeight:700,color:scoreColor(emp.complianceScore)}}>{emp.complianceScore}</span>
+                      </div>
+                    </td>
+                    <td style={{padding:"10px 12px"}}>
+                      <span style={{fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:10,background:scoreBg(emp.complianceScore),color:scoreColor(emp.complianceScore)}}>
+                        {emp.complianceScore>85?"Compliant":emp.complianceScore>65?"Monitored":emp.complianceScore>50?"At-Risk":"Critical Risk"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// MASTER DATA PAGE
+// ============================================================
+function MasterDataPage({ user, toast }) {
+  const [tab, setTab] = useState("Departments");
+  const [depts, setDepts]   = useState(()=>DB.get("masterDepts") || DEPARTMENTS.map((d,i)=>({id:"d"+i,name:d,active:true})));
+  const [cats, setCats]     = useState(()=>DB.get("masterCats")  || VIOLATION_CATEGORIES.map((c,i)=>({id:"c"+i,name:c,active:true})));
+  const [rcs, setRcs]       = useState(()=>DB.get("masterRCs")   || ROOT_CAUSE_CATEGORIES.map((r,i)=>({id:"r"+i,name:r,active:true})));
+  const [desigs, setDesigs] = useState(()=>DB.get("masterDesigs")|| DESIGNATIONS.map((d,i)=>({id:"dg"+i,name:d,active:true})));
+
+  const [newItem, setNewItem]   = useState("");
+  const [editId,  setEditId]    = useState(null);   // id of item being edited inline
+  const [editVal, setEditVal]   = useState("");      // current edit text
+  const [delConfirm, setDelConfirm] = useState(null); // id pending delete confirm
+
+  if (user.role !== "Master Admin") return <EmptyState icon="" title="Access Restricted" sub="Master Admin only"/>;
+
+  const configs = {
+    "Departments":           { data:depts,  set:(v)=>{ setDepts(v);  DB.set("masterDepts",v);  } },
+    "Violation Categories":  { data:cats,   set:(v)=>{ setCats(v);   DB.set("masterCats",v);   } },
+    "Root Cause Categories": { data:rcs,    set:(v)=>{ setRcs(v);    DB.set("masterRCs",v);    } },
+    "Designations":          { data:desigs, set:(v)=>{ setDesigs(v); DB.set("masterDesigs",v); } },
+  };
+  const cfg = configs[tab];
+
+  // Cancel any edit / delete when switching tabs
+  const switchTab = (t) => { setTab(t); setEditId(null); setEditVal(""); setDelConfirm(null); setNewItem(""); };
+
+  const addItem = () => {
+    const name = newItem.trim();
+    if (!name) { toast("Enter a name","error"); return; }
+    if (cfg.data.some(d=>d.name.toLowerCase()===name.toLowerCase())) { toast("Already exists","error"); return; }
+    cfg.set([...cfg.data, {id:"n"+Date.now(), name, active:true}]);
+    setNewItem(""); toast(`Added: ${name}`,"success");
+  };
+
+  const startEdit = (item) => { setEditId(item.id); setEditVal(item.name); setDelConfirm(null); };
+
+  const saveEdit = () => {
+    const name = editVal.trim();
+    if (!name) { toast("Name cannot be empty","error"); return; }
+    cfg.set(cfg.data.map(d=>d.id===editId?{...d,name}:d));
+    setEditId(null); setEditVal(""); toast("Entry updated","success");
+  };
+
+  const cancelEdit = () => { setEditId(null); setEditVal(""); };
+
+  const askDelete = (id) => { setDelConfirm(id); setEditId(null); };
+
+  const confirmDelete = (id) => {
+    cfg.set(cfg.data.filter(d=>d.id!==id));
+    setDelConfirm(null); toast("Entry deleted","success");
+  };
+
+  const toggleActive = (id) => {
+    cfg.set(cfg.data.map(d=>d.id===id?{...d,active:!d.active}:d));
+  };
+
+  return (
+    <div>
+      <PageHeader title="Master Data Management" sub="Configure all system dropdowns, categories, and reference data"/>
+      <Tabs tabs={Object.keys(configs)} active={tab} onChange={switchTab}/>
+
+      <Card>
+        <CardHeader
+          title={tab}
+          subtitle={`${cfg.data.filter(d=>d.active).length} active  ${cfg.data.length} total`}
+          actions={
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <Input value={newItem} onChange={setNewItem}
+                placeholder={`Add new ${tab.replace(/s$/,"").toLowerCase()}`}
+                style={{width:220}}
+                onKeyDown={e=>e.key==="Enter"&&addItem()}
+              />
+              <Btn variant="primary" size="sm" onClick={addItem}>+ Add</Btn>
+            </div>
+          }
+        />
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["#","Name","Status","Actions"].map(h=>(
+                  <th key={h} style={{padding:"8px 14px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {cfg.data.length===0 && (
+                <tr><td colSpan={4}><EmptyState icon="" title="No entries yet" sub="Add your first entry above"/></td></tr>
+              )}
+              {cfg.data.map((item,i)=>(
+                <tr key={item.id} style={{borderBottom:"1px solid var(--line)",background:delConfirm===item.id?"var(--red-bg)":"transparent"}}
+                  onMouseEnter={e=>{if(delConfirm!==item.id)e.currentTarget.style.background="var(--bg)"}}
+                  onMouseLeave={e=>{if(delConfirm!==item.id)e.currentTarget.style.background="transparent"}}
+                >
+                  {/* # */}
+                  <td style={{padding:"10px 14px",fontFamily:"var(--mono)",fontSize:11,color:"var(--text3)",width:40}}>{String(i+1).padStart(2,"0")}</td>
+
+                  {/* Name  inline edit */}
+                  <td style={{padding:"8px 14px",fontSize:13,fontWeight:500,opacity:item.active?1:.5}}>
+                    {editId===item.id ? (
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <Input value={editVal} onChange={setEditVal} style={{maxWidth:280}}
+                          onKeyDown={e=>{if(e.key==="Enter")saveEdit();if(e.key==="Escape")cancelEdit();}}
+                        onFocus={e=>e.target.select()}
+                        />
+                        <Btn size="sm" variant="primary" onClick={saveEdit}>Save</Btn>
+                        <Btn size="sm" ghost onClick={cancelEdit}></Btn>
+                      </div>
+                    ) : (
+                      <span>{item.name}</span>
+                    )}
+                  </td>
+
+                  {/* Status */}
+                  <td style={{padding:"10px 14px",width:100}}>
+                    {delConfirm===item.id ? (
+                      <span style={{fontSize:11,color:"var(--red)",fontWeight:600}}> Delete?</span>
+                    ) : (
+                      <span
+                        onClick={()=>toggleActive(item.id)}
+                        title="Click to toggle active/inactive"
+                        style={{fontSize:11,fontWeight:500,color:item.active?"var(--green)":"var(--text3)",cursor:"pointer",userSelect:"none"}}
+                      >{item.active?" Active":" Inactive"}</span>
+                    )}
+                  </td>
+
+                  {/* Actions */}
+                  <td style={{padding:"8px 14px",width:200}}>
+                    {delConfirm===item.id ? (
+                      <div style={{display:"flex",gap:6}}>
+                        <Btn size="sm" variant="danger" onClick={()=>confirmDelete(item.id)}>Yes, Delete</Btn>
+                        <Btn size="sm" ghost onClick={()=>setDelConfirm(null)}>Cancel</Btn>
+                      </div>
+                    ) : editId===item.id ? null : (
+                      <div style={{display:"flex",gap:6}}>
+                        <Btn size="sm" onClick={()=>startEdit(item)}> Edit</Btn>
+                        <Btn size="sm" ghost onClick={()=>toggleActive(item.id)}>{item.active?"Deactivate":"Activate"}</Btn>
+                        <Btn size="sm" variant="danger" onClick={()=>askDelete(item.id)}> Delete</Btn>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{padding:"10px 14px",borderTop:"1px solid var(--line)",fontSize:11,color:"var(--text3)",display:"flex",gap:16}}>
+          <span> Click <strong>Edit</strong> to rename  Click status to toggle active  <strong>Delete</strong> removes permanently</span>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// AUDIT TRAIL PAGE
+// ============================================================
+function AuditTrailPage({ user }) {
+  const [logs, setLogs] = useState(DB.get("auditLogs",[]).sort((a,b)=>b.ts-a.ts));
+  const [search, setSearch] = useState("");
+  const [page, setPageNum] = useState(1);
+  const PER = 12;
+
+  const filtered = logs.filter(l => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return l.user.toLowerCase().includes(q) || l.action.toLowerCase().includes(q) || l.entity.toLowerCase().includes(q) || l.detail.toLowerCase().includes(q);
+  });
+
+  const exportAudit = () => {
+    const wb = XLSX.utils.book_new();
+    const rows = [["Timestamp","User","Role","Action","Entity","Detail","IP"],
+      ...filtered.map(l=>[new Date(l.ts).toLocaleString("en-IN"),l.user,l.role,l.action,l.entity,l.detail,l.ip])];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Audit Trail");
+    XLSX.writeFile(wb, `PVMS_AuditTrail_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  const ACTION_COLORS = { LOGIN:"var(--blue)", CASE_CREATED:"var(--green)", STATUS_CHANGED:"var(--amber)", CASE_APPROVED:"var(--green)", CONFIG_CHANGED:"var(--purple)", USER_CREATED:"var(--cyan)", USER_MODIFIED:"var(--cyan)", LETTER_GENERATED:"var(--purple)", CAPA_UPDATED:"var(--amber)", CASE_REVIEWED:"var(--blue)" };
+
+  return (
+    <div>
+      <PageHeader title="Audit Trail" sub="Complete immutable action history  No hard deletes  ISO-compliant"
+        actions={<Btn size="sm" onClick={exportAudit}> Export Log</Btn>}
+      />
+
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        <SearchBar value={search} onChange={v=>{setSearch(v);setPageNum(1)}} placeholder="Search user, action, entity"/>
+        <span style={{fontSize:12,color:"var(--text3)",alignSelf:"center"}}>{filtered.length} log entries</span>
+      </div>
+
+      <Card>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:800}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["Timestamp","User","Role","Action","Entity","Detail","IP"].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice((page-1)*PER, page*PER).map(l=>(
+                <tr key={l.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
+                  <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>{new Date(l.ts).toLocaleString("en-IN",{dateStyle:"short",timeStyle:"short"})}</td>
+                  <td style={{padding:"9px 12px",fontSize:12.5,fontWeight:500}}>{l.user}</td>
+                  <td style={{padding:"9px 12px"}}><span style={{fontSize:10,background:"var(--bg2)",color:"var(--text3)",padding:"2px 7px",borderRadius:4,border:"1px solid var(--line)",whiteSpace:"nowrap"}}>{l.role}</span></td>
+                  <td style={{padding:"9px 12px"}}><span style={{fontSize:11,fontFamily:"var(--mono)",fontWeight:600,color:ACTION_COLORS[l.action]||"var(--text3)"}}>{l.action}</span></td>
+                  <td style={{padding:"9px 12px",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>{l.entity}</td>
+                  <td style={{padding:"9px 12px",fontSize:12,color:"var(--text2)"}}>{l.detail}</td>
+                  <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:10.5,color:"var(--text3)"}}>{l.ip}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Pagination total={filtered.length} page={page} perPage={PER} onChange={setPageNum}/>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// USER MANAGEMENT PAGE
+// ============================================================
+function EmailIntegrationPage({ user, toast }) {
+  const defaultTemplates = [
+    {
+      id:"due",
+      name:"Due Date Reminder",
+      subject:"PVMS Reminder: {{violationId}} is due on {{dueDate}}",
+      body:"Dear {{userName}},\n\nThis is an automated reminder for the pending violation assigned to you.\n\nViolation ID: {{violationId}}\nPriority: {{priority}}\nDue Date: {{dueDate}}\nStatus: {{status}}\n\nPlease take the required action before the deadline.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    },
+    {
+      id:"escalation",
+      name:"Escalation Reminder",
+      subject:"PVMS Escalation: {{violationId}} is overdue",
+      body:"Dear Manager,\n\nThe following violation has crossed its due date and remains unresolved.\n\nViolation ID: {{violationId}}\nAssigned User: {{assignedUser}}\nDue Date: {{dueDate}}\nPending Since: {{pendingDays}} days\n\nPlease review and take necessary action.\n\nRegards,\nPVMS Automation Engine"
+    },
+    {
+      id:"summary",
+      name:"Daily Summary",
+      subject:"PVMS Daily Summary - {{summaryDate}}",
+      body:"Dear {{userName}},\n\nDaily PVMS summary:\n\nOpen Violations: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed Today: {{closedCount}}\n\nRegards,\nPVMS Automation System"
+    }
+  ];
+  const [templates, setTemplates] = useState(()=>DB.get("emailTemplates") || defaultTemplates);
+  const [selected, setSelected] = useState(templates[0]?.id || "due");
+  const [testEmail, setTestEmail] = useState("");
+  const [sending, setSending] = useState(false);
+
+  if (user.role !== "Master Admin") return <EmptyState icon="" title="Access Restricted" sub="Master Admin only"/>;
+
+  const current = templates.find(t => t.id === selected) || templates[0];
+  const updateTemplate = (key, value) => {
+    const next = templates.map(t => t.id === current.id ? { ...t, [key]: value } : t);
+    setTemplates(next);
+    DB.set("emailTemplates", next);
+  };
+  const resetTemplates = () => {
+    setTemplates(defaultTemplates);
+    setSelected("due");
+    DB.set("emailTemplates", defaultTemplates);
+    toast("Email templates reset", "success");
+  };
+  const sendTest = async () => {
+    if (!testEmail) { toast("Enter a test email address", "error"); return; }
+    setSending(true);
+    try {
+      const res = await fetch("/api/email/test", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ to:testEmail, template:current })
+      });
+      if (!res.ok) throw new Error("send failed");
+      toast("Test email sent", "success");
+    } catch (err) {
+      toast("Test email failed. Check Vercel email environment variables.", "error");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader title="Email Integration" sub="Reminder templates, SMTP test, and automation readiness"
+        actions={<Btn size="sm" onClick={resetTemplates}>Reset Templates</Btn>}
+      />
+      <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
+        <Card>
+          <CardHeader title="Templates"/>
+          <div style={{padding:10,display:"flex",flexDirection:"column",gap:6}}>
+            {templates.map(t => (
+              <button key={t.id} onClick={()=>setSelected(t.id)}
+                style={{textAlign:"left",padding:"9px 10px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:selected===t.id?"var(--blue-l)":"var(--bg3)",color:selected===t.id?"var(--blue)":"var(--text2)",fontWeight:selected===t.id?600:500}}
+              >{t.name}</button>
+            ))}
+          </div>
+        </Card>
+        <div>
+          <Card style={{marginBottom:16}}>
+            <CardHeader title={current.name} subtitle="Use variables such as {{userName}}, {{violationId}}, {{dueDate}}, {{priority}}, {{status}}"/>
+            <div style={{padding:16,display:"grid",gap:12}}>
+              <FormGroup label="Subject">
+                <Input value={current.subject} onChange={v=>updateTemplate("subject",v)}/>
+              </FormGroup>
+              <FormGroup label="Email Body">
+                <Textarea value={current.body} onChange={v=>updateTemplate("body",v)} rows={12}/>
+              </FormGroup>
+            </div>
+          </Card>
+          <Card>
+            <CardHeader title="Send Test Email" subtitle="Server-side SMTP uses EMAIL_USER and EMAIL_PASS in Vercel"/>
+            <div style={{padding:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+              <Input type="email" value={testEmail} onChange={setTestEmail} placeholder="recipient@company.com" style={{maxWidth:320}}/>
+              <Btn variant="primary" onClick={sendTest} loading={sending}>Send Test</Btn>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsersPage({ user, toast }) {
+  const [users, setUsers]     = useState(()=>DB.get("users",[]));
+  const [showForm, setShowForm] = useState(false);
+  const [editUser, setEditUser] = useState(null);   // user object being edited
+  const [delUser,  setDelUser]  = useState(null);   // user id pending delete
+  const [form, setForm]         = useState({ name:"", email:"", empCode:"", dept:"", role:"User/Employee", designation:"", active:true });
+  const [search, setSearch]     = useState("");
+  const [saving, setSaving]     = useState(false);
+
+  // Permission matrix  stored in DB so Master Admin can edit
+  const DEFAULT_MATRIX = [
+    { module:"Dashboard Analytics",        perms:["Full","Full","Dept only","Read only","Read only"] },
+    { module:"Register Violation",         perms:["","","","",""] },
+    { module:"Approve / Reject Cases",     perms:["","","","",""] },
+    { module:"Investigation & CAPA",       perms:["","","","Assigned",""] },
+    { module:"Warning Letters",            perms:["","View","","","Own only"] },
+    { module:"Reports & MIS Export",       perms:["","","Dept only","",""] },
+    { module:"Bulk Data Export",           perms:["","","","",""] },
+    { module:"User Management",            perms:["","","","",""] },
+    { module:"Master Data Config",         perms:["","","","",""] },
+    { module:"Audit Trail",                perms:["","Read","Read","",""] },
+    { module:"Employee Compliance",        perms:["","","Dept only","",""] },
+  ];
+  const [matrix, setMatrix] = useState(()=>DB.get("permMatrix") || DEFAULT_MATRIX);
+  const [editMatrix, setEditMatrix] = useState(false);
+  const [matrixDraft, setMatrixDraft] = useState(null);
+  const [newModule, setNewModule] = useState("");
+
+  if (user.role !== "Master Admin") return <EmptyState icon="" title="Access Restricted" sub="Master Admin only"/>;
+
+  const filtered = users.filter(u => !search || [u.name,u.email,u.role,u.dept].some(x=>(x||"").toLowerCase().includes(search.toLowerCase())));
+  const roleCounts = ROLES.reduce((a,r)=>{a[r]=users.filter(u=>u.role===r).length;return a},{});
+
+  const openAdd = () => {
+    setEditUser(null);
+    setForm({ name:"", email:"", empCode:"", dept:"", role:"User/Employee", designation:"", active:true });
+    setShowForm(true);
+    setDelUser(null);
+  };
+
+  const openEdit = (u) => {
+    setEditUser(u);
+    setForm({ name:u.name, email:u.email, empCode:u.empCode||"", dept:u.dept||"", role:u.role, designation:u.designation||"", active:u.active!==false });
+    setShowForm(true);
+    setDelUser(null);
+  };
+
+  const saveUser = () => {
+    if (!form.name || !form.email) { toast("Name and email required","error"); return; }
+    setSaving(true);
+    setTimeout(()=>{
+      const arr = DB.get("users",[]);
+      if (editUser) {
+        const idx = arr.findIndex(x=>x.id===editUser.id);
+        if (idx>=0) arr[idx] = {...arr[idx],...form};
+        toast(`User ${form.name} updated`,"success");
+      } else {
+        if (arr.some(x=>x.email.toLowerCase()===form.email.toLowerCase())) { toast("Email already exists","error"); setSaving(false); return; }
+        arr.push({id:"u"+Date.now(),...form,complianceScore:100,violations:0});
+        toast(`User ${form.name} created`,"success");
+      }
+      DB.set("users",arr); setUsers([...arr]);
+      setShowForm(false); setEditUser(null);
+      setForm({name:"",email:"",empCode:"",dept:"",role:"User/Employee",designation:"",active:true});
+      setSaving(false);
+    },400);
+  };
+
+  const confirmDelete = (uid) => {
+    if (uid==="u1") { toast("Cannot delete system administrator","error"); return; }
+    const arr = DB.get("users",[]).filter(u=>u.id!==uid);
+    DB.set("users",arr); setUsers([...arr]); setDelUser(null);
+    toast("User deleted","success");
+  };
+
+  const toggleActive = (uid) => {
+    const arr = DB.get("users",[]).map(u=>u.id===uid?{...u,active:!u.active}:u);
+    DB.set("users",arr); setUsers([...arr]);
+    toast("User status updated","success");
+  };
+
+  //  Matrix editing 
+  const startMatrixEdit = () => { setMatrixDraft(JSON.parse(JSON.stringify(matrix))); setEditMatrix(true); };
+  const saveMatrix = () => { setMatrix(matrixDraft); DB.set("permMatrix",matrixDraft); setEditMatrix(false); toast("Permission matrix saved","success"); };
+  const cancelMatrixEdit = () => { setEditMatrix(false); setMatrixDraft(null); };
+  const resetMatrix = () => { setMatrixDraft(JSON.parse(JSON.stringify(DEFAULT_MATRIX))); toast("Reset to defaults  click Save to apply","info"); };
+
+  const updatePerm = (rowIdx, colIdx, val) => {
+    const d = JSON.parse(JSON.stringify(matrixDraft));
+    d[rowIdx].perms[colIdx] = val;
+    setMatrixDraft(d);
+  };
+  const updateModule = (rowIdx, val) => {
+    const d = JSON.parse(JSON.stringify(matrixDraft));
+    d[rowIdx].module = val;
+    setMatrixDraft(d);
+  };
+  const deleteRow = (rowIdx) => {
+    const d = JSON.parse(JSON.stringify(matrixDraft));
+    d.splice(rowIdx,1);
+    setMatrixDraft(d);
+  };
+  const addRow = () => {
+    if (!newModule.trim()) { toast("Enter a module name","error"); return; }
+    const d = JSON.parse(JSON.stringify(matrixDraft));
+    d.push({module:newModule.trim(), perms:["","","","",""]});
+    setMatrixDraft(d); setNewModule(""); toast("Row added","success");
+  };
+
+  const downloadEmployeeTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const rows = [["SPOCName","EmailID","DepartmentName","ReportingToName","ReportingToEmail","HODBUHEmail","ManagementEmail","Status"]];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Employee Import");
+    XLSX.writeFile(wb, "PVMS_Employee_Import_Template.xlsx");
+  };
+
+  const importEmployees = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type:"array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval:"" });
+      const current = DB.get("users", []);
+      let added = 0, updated = 0;
+      rows.forEach((row, index) => {
+        const email = String(row.EmailID || "").trim().toLowerCase();
+        const name = String(row.SPOCName || "").trim();
+        if (!email || !name) return;
+        const existingIndex = current.findIndex(u => (u.email || "").toLowerCase() === email);
+        const record = {
+          name,
+          email,
+          dept: String(row.DepartmentName || "").trim(),
+          designation: "Employee",
+          role: "User/Employee",
+          active: String(row.Status || "Active").toLowerCase() !== "inactive",
+          reportingToName: String(row.ReportingToName || "").trim(),
+          reportingToEmail: String(row.ReportingToEmail || "").trim(),
+          hodBuhEmail: String(row.HODBUHEmail || "").trim(),
+          managementEmail: String(row.ManagementEmail || "").trim(),
+          empCode: existingIndex >= 0 ? current[existingIndex].empCode : `EMP-${String(Date.now() + index).slice(-6)}`,
+          complianceScore: existingIndex >= 0 ? current[existingIndex].complianceScore : 100,
+          violations: existingIndex >= 0 ? current[existingIndex].violations : 0,
+        };
+        if (existingIndex >= 0) {
+          current[existingIndex] = { ...current[existingIndex], ...record };
+          updated++;
+        } else {
+          current.push({ id:"u" + Date.now() + index, ...record });
+          added++;
+        }
+      });
+      DB.set("users", current);
+      setUsers([...current]);
+      toast(`Employee import complete: ${added} added, ${updated} updated`, "success");
+    } catch (err) {
+      toast("Unable to import employee file", "error");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const ROLE_COLORS = {"Master Admin":["var(--red-bg)","var(--red)"],"Management":["var(--purple-bg)","var(--purple)"],"HOD":["var(--blue-l)","var(--blue)"],"Process Dept Rep":["var(--amber-bg)","var(--amber)"],"User/Employee":["var(--green-bg)","var(--green)"]};
+  const PERM_OPTIONS = ["","","Full","Read","Read only","Dept only","Assigned","View","Own only","Partial"];
+
+  return (
+    <div>
+      <PageHeader title="User Management" sub="Role-based access control  Manage accounts  Configure permissions"
+        actions={<Btn variant="primary" size="sm" onClick={openAdd}>+ Add User</Btn>}
+      />
+
+      {/* KPI row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:16}}>
+        {ROLES.map((r,i)=>{
+          const cols=["var(--red)","var(--purple)","var(--blue)","var(--amber)","var(--green)"];
+          return <KpiCard key={r} label={r} value={roleCounts[r]||0} color={cols[i]}/>;
+        })}
+      </div>
+
+      {/* Add / Edit Form */}
+      {showForm && (
+        <Card style={{marginBottom:16}}>
+          <CardHeader title={editUser?"Edit User":"Add New User"} actions={<Btn size="sm" ghost onClick={()=>{setShowForm(false);setEditUser(null);}}> Cancel</Btn>}/>
+          <div style={{padding:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <FormGroup label="Full Name" required><Input value={form.name} onChange={v=>setForm(f=>({...f,name:v}))} placeholder="Full name"/></FormGroup>
+            <FormGroup label="Email" required><Input type="email" value={form.email} onChange={v=>setForm(f=>({...f,email:v}))} placeholder="email@company.com"/></FormGroup>
+            <FormGroup label="Employee Code"><Input value={form.empCode} onChange={v=>setForm(f=>({...f,empCode:v}))} placeholder="EMP-0000"/></FormGroup>
+            <FormGroup label="Department"><Select value={form.dept} onChange={v=>setForm(f=>({...f,dept:v}))} options={activeMasterOptions("masterDepts", DEPARTMENTS)} placeholder="Select dept"/></FormGroup>
+            <FormGroup label="Designation"><Select value={form.designation} onChange={v=>setForm(f=>({...f,designation:v}))} options={DESIGNATIONS} placeholder="Select designation"/></FormGroup>
+            <FormGroup label="Role"><Select value={form.role} onChange={v=>setForm(f=>({...f,role:v}))} options={ROLES}/></FormGroup>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,cursor:"pointer"}}>
+                <input type="checkbox" checked={form.active} onChange={e=>setForm(f=>({...f,active:e.target.checked}))} style={{width:14,height:14}}/>
+                Active account
+              </label>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
+              <Btn onClick={()=>{setShowForm(false);setEditUser(null);}}>Cancel</Btn>
+              <Btn variant="primary" onClick={saveUser} loading={saving}>{editUser?"Save Changes":"Create User"}</Btn>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <Card style={{marginBottom:16}}>
+        <CardHeader
+          title="Bulk Import Employee Database"
+          subtitle="Accepted columns: SPOCName, EmailID, DepartmentName, ReportingToName, ReportingToEmail, HODBUHEmail, ManagementEmail, Status"
+          actions={<Btn size="sm" onClick={downloadEmployeeTemplate}>Download Template</Btn>}
+        />
+        <div style={{padding:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={importEmployees}
+            style={{border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"7px 10px",background:"var(--bg3)",fontSize:12,color:"var(--text2)"}}
+          />
+          <span style={{fontSize:12,color:"var(--text3)"}}>Existing employees are updated by EmailID. New employees are created as User/Employee accounts.</span>
+        </div>
+      </Card>
+
+      {/* User Table */}
+      <Card style={{marginBottom:16}}>
+        <CardHeader title="All Users" actions={<SearchBar value={search} onChange={setSearch} placeholder="Search users"/>}/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                {["User","Emp Code","Department","Role","Designation","Status","Actions"].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(u=>{
+                const rc = ROLE_COLORS[u.role]||["var(--bg2)","var(--text3)"];
+                const isDel = delUser===u.id;
+                return (
+                  <tr key={u.id} style={{borderBottom:"1px solid var(--line)",background:isDel?"var(--red-bg)":"transparent"}}
+                    onMouseEnter={e=>{if(!isDel)e.currentTarget.style.background="var(--bg)"}}
+                    onMouseLeave={e=>{if(!isDel)e.currentTarget.style.background="transparent"}}
+                  >
+                    <td style={{padding:"9px 12px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <Avatar name={u.name}/>
+                        <div><div style={{fontSize:13,fontWeight:500}}>{u.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{u.email}</div></div>
+                      </div>
+                    </td>
+                    <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:"var(--text3)"}}>{u.empCode||""}</td>
+                    <td style={{padding:"9px 12px",fontSize:12}}>{u.dept||""}</td>
+                    <td style={{padding:"9px 12px"}}><span style={{fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:10,background:rc[0],color:rc[1]}}>{u.role}</span></td>
+                    <td style={{padding:"9px 12px",fontSize:12}}>{u.designation||""}</td>
+                    <td style={{padding:"9px 12px"}}><span style={{fontSize:11,color:u.active!==false?"var(--green)":"var(--text3)"}}>{u.active!==false?" Active":" Inactive"}</span></td>
+                    <td style={{padding:"9px 12px"}}>
+                      {isDel ? (
+                        <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                          <span style={{fontSize:11,color:"var(--red)",fontWeight:600}}>Delete?</span>
+                          <Btn size="sm" variant="danger" onClick={()=>confirmDelete(u.id)}>Yes</Btn>
+                          <Btn size="sm" ghost onClick={()=>setDelUser(null)}>No</Btn>
+                        </div>
+                      ) : (
+                        <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
+                          <Btn size="sm" onClick={()=>openEdit(u)}> Edit</Btn>
+                          <Btn size="sm" ghost onClick={()=>toggleActive(u.id)}>{u.active!==false?"Disable":"Enable"}</Btn>
+                          {u.id!=="u1" && <Btn size="sm" ghost onClick={()=>toast(`Reset link sent to ${u.email}`,"success")}> Pwd</Btn>}
+                          {u.id!=="u1" && <Btn size="sm" variant="danger" onClick={()=>{setDelUser(u.id);setShowForm(false);}}></Btn>}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length===0 && <tr><td colSpan={7}><EmptyState icon="" title="No users found" sub="Adjust your search"/></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Permission Matrix */}
+      <Card>
+        <CardHeader
+          title="Role Permission Matrix"
+          subtitle="Define what each role can access across the portal"
+          actions={
+            <div style={{display:"flex",gap:7}}>
+              {editMatrix ? (
+                <>
+                  <Btn size="sm" ghost onClick={resetMatrix}> Reset Defaults</Btn>
+                  <Btn size="sm" onClick={cancelMatrixEdit}>Cancel</Btn>
+                  <Btn size="sm" variant="primary" onClick={saveMatrix}> Save Matrix</Btn>
+                </>
+              ) : (
+                <Btn size="sm" variant="primary" onClick={startMatrixEdit}> Edit Permissions</Btn>
+              )}
+            </div>
+          }
+        />
+
+        {editMatrix && (
+          <div style={{padding:"10px 14px",background:"var(--blue-l)",borderBottom:"1px solid var(--line)",fontSize:12,color:"var(--blue)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span> Editing mode: Click any cell to change permission  Add or delete rows  Press Save when done</span>
+          </div>
+        )}
+
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"var(--bg)"}}>
+                <th style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textAlign:"left",borderBottom:"1px solid var(--line)",minWidth:180}}>Module / Feature</th>
+                {ROLES.map(r=>(
+                  <th key={r} style={{padding:"8px 10px",fontSize:10,fontWeight:600,color:"var(--text3)",textAlign:"center",borderBottom:"1px solid var(--line)",textTransform:"uppercase",letterSpacing:".04em",whiteSpace:"nowrap"}}>{r}</th>
+                ))}
+                {editMatrix && <th style={{padding:"8px 10px",fontSize:10,color:"var(--text3)",textAlign:"center",borderBottom:"1px solid var(--line)"}}>DEL</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {(editMatrix ? matrixDraft : matrix).map((row, rowIdx)=>(
+                <tr key={rowIdx} style={{borderBottom:"1px solid var(--line)"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"}
+                  onMouseLeave={e=>e.currentTarget.style.background=""}
+                >
+                  {/* Module name */}
+                  <td style={{padding:"7px 12px"}}>
+                    {editMatrix ? (
+                      <Input value={row.module} onChange={v=>updateModule(rowIdx,v)} style={{fontSize:12,padding:"4px 7px"}}/>
+                    ) : (
+                      <span style={{fontSize:12.5,fontWeight:500}}>{row.module}</span>
+                    )}
+                  </td>
+                  {/* Permission cells */}
+                  {row.perms.map((p,colIdx)=>(
+                    <td key={colIdx} style={{padding:"7px 10px",textAlign:"center"}}>
+                      {editMatrix ? (
+                        <select value={p} onChange={e=>updatePerm(rowIdx,colIdx,e.target.value)}
+                          style={{fontSize:11,padding:"3px 5px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:"var(--bg3)",color:"var(--text)",textAlign:"center",width:"100%",maxWidth:100,cursor:"pointer"}}
+                        >
+                          {PERM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                        </select>
+                      ) : (
+                        <span style={{fontSize:12,color:p===""?"var(--green)":p===""?"var(--line2)":"var(--text3)",fontWeight:p===""?700:400}}>{p}</span>
+                      )}
+                    </td>
+                  ))}
+                  {/* Delete row button */}
+                  {editMatrix && (
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>
+                      <button onClick={()=>deleteRow(rowIdx)}
+                        style={{background:"var(--red-bg)",border:"1px solid var(--red-bd)",borderRadius:"var(--r)",color:"var(--red)",cursor:"pointer",padding:"2px 7px",fontSize:12,fontWeight:600}}
+                        title="Delete this row"
+                      ></button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {/* Add new row */}
+              {editMatrix && (
+                <tr style={{borderTop:"2px solid var(--line)",background:"var(--bg)"}}>
+                  <td style={{padding:"8px 12px"}}>
+                    <div style={{display:"flex",gap:7}}>
+                      <Input value={newModule} onChange={setNewModule} placeholder="New module name" style={{fontSize:12,padding:"4px 7px"}}
+                        onKeyDown={e=>e.key==="Enter"&&addRow()}
+                      />
+                      <Btn size="sm" variant="primary" onClick={addRow}>+ Row</Btn>
+                    </div>
+                  </td>
+                  <td colSpan={ROLES.length+1} style={{padding:"8px 12px",fontSize:11,color:"var(--text3)"}}>
+                    New row defaults to "" for all roles. Edit after adding.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {!editMatrix && (
+          <div style={{padding:"8px 14px",borderTop:"1px solid var(--line)",fontSize:11,color:"var(--text3)"}}>
+             Click <strong>Edit Permissions</strong> to modify access levels for any role and module.
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// PDF GENERATORS
+// ============================================================
+function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Letter Level-1") {
+  const { jsPDF } = window.jspdf;
+  if (!jsPDF) { toast("PDF library not loaded","error"); return; }
+  const doc = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
+  const W=210, ml=22, mr=188, lw=mr-ml;
+
+  // Header
+  doc.setFillColor(13,27,42);
+  doc.rect(0,0,W,30,"F");
+  // Add logo image (white version)
+  try { doc.addImage(LOGO_B64,"JPEG",ml,4,60,16); } catch(e) {
+    // fallback to text if image fails
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+    doc.text(COMPANY_NAME.toUpperCase(),W/2,12,{align:"center"});
+  }
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","normal");
+  doc.setFontSize(7.5);
+  doc.text(ISO_CERTS, W/2, 22, {align:"center"});
+  doc.setFontSize(7);
+  doc.text("Confidential | HR Document | Not for External Distribution", W/2, 27, {align:"center"});
+
+  // Ref line
+  const refNo = "HR/WL/"+new Date().getFullYear()+"/"+violation.id.split("-").pop();
+  doc.setTextColor(50,50,50);
+  doc.setFontSize(8.5);
+  doc.setFont("helvetica","normal");
+  doc.text(`Ref No: ${refNo}`, ml, 35);
+  doc.text(`Date: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"})}`, mr, 35, {align:"right"});
+
+  // Title
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(13);
+  doc.setTextColor(13,27,42);
+  const title = letterType.toUpperCase();
+  doc.text(title, W/2, 45, {align:"center"});
+  doc.setLineWidth(.5);
+  doc.setDrawColor(13,27,42);
+  const tw = doc.getTextWidth(title);
+  doc.line(W/2-tw/2, 47, W/2+tw/2, 47);
+
+  // Employee details box
+  doc.setFillColor(244,247,251);
+  doc.roundedRect(ml, 52, lw, 38, 2,2,"F");
+  doc.setDrawColor(200,212,230);
+  doc.setLineWidth(.3);
+  doc.roundedRect(ml, 52, lw, 38, 2,2,"S");
+
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(13,27,42);
+  const fields = [
+    ["To", violation.empName || ""],
+    ["Employee Code", violation.empCode || ""],
+    ["Designation", violation.designation || ""],
+    ["Department", violation.dept || ""],
+    ["Date of Violation", violation.date || ""],
+    ["Case Reference No.", violation.id],
+  ];
+  const colW = lw/2;
+  fields.forEach((f,i)=>{
+    const col = i%2; const row = Math.floor(i/2);
+    const x = ml+6+col*colW;
+    const y = 59+row*12;
+    doc.setFont("helvetica","bold");
+    doc.setTextColor(80,80,80);
+    doc.text(f[0]+":", x, y);
+    doc.setFont("helvetica","normal");
+    doc.setTextColor(13,27,42);
+    doc.text(f[1], x+30, y);
+  });
+
+  let y = 97;
+
+  // Body
+  const para = (text, indent=0) => {
+    doc.setFont("helvetica","normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(40,40,40);
+    const lines = doc.splitTextToSize(text, lw-indent);
+    doc.text(lines, ml+indent, y);
+    y += lines.length * 5 + 4;
+  };
+  const heading = (text) => {
+    doc.setFont("helvetica","bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(13,27,42);
+    doc.text(text, ml, y);
+    y += 6;
+  };
+
+  heading("Subject: Notice of Process Compliance Violation");
+  y += 2;
+  para(`Dear ${violation.empName || "Employee"},`);
+  para(`This ${letterType} is being formally issued to you following a thorough investigation of a process compliance violation reported on ${violation.date}. The investigation conducted by the designated investigator and approved by the HOD has confirmed that you were found in non-compliance with the established process standards and SOPs applicable to your role.`);
+
+  heading("Nature of Violation:");
+  para(`Category: ${violation.category}`, 4);
+  para(`SOP / Policy Violated: ${violation.sopViolated||"Company Process Standards"}`, 4);
+  para(`Severity Classification: ${violation.severity}`, 4);
+  para(`Description: ${violation.description}`, 4);
+
+  heading("Impact & Risk:");
+  para(`This violation has been assessed with a risk score of ${violation.riskScore||""}/10 and is categorized as ${violation.severity} severity under the Process Violation Management System (PVMS) governed under ISO 9001:2015, ISO 45001:2018, and applicable quality and safety management standards.`);
+
+  if (violation.repeatViolation) {
+    doc.setFillColor(254,232,232);
+    doc.roundedRect(ml, y, lw, 12, 1,1,"F");
+    doc.setFont("helvetica","bold");
+    doc.setFontSize(9);
+    doc.setTextColor(185,28,28);
+    doc.text("  REPEAT VIOLATION: This is a repeat occurrence. Stricter disciplinary action will apply.", ml+4, y+7.5);
+    y += 16;
+  }
+
+  heading("Expected Corrective Behaviour:");
+  para(`You are hereby formally directed to immediately comply with all applicable SOPs, work instructions, and company policies relevant to your role and department. Any recurrence of similar behaviour may attract more stringent disciplinary action as per the Company's Disciplinary Policy Matrix, including but not limited to suspension, increment hold, or termination of employment.`);
+
+  para(`You are required to submit your written acknowledgement and response to this letter within three (3) working days to your HOD and the HR Department.`);
+
+  // Signatures
+  y = Math.max(y, 230);
+  doc.setLineWidth(.3);
+  doc.setDrawColor(180,180,180);
+  const sigW = lw/3;
+  ["HOD / Department Head","HR Manager / HR BP","Management (Noted)"].forEach((s,i)=>{
+    const x = ml + i*sigW;
+    doc.line(x+4, y+14, x+sigW-4, y+14);
+    doc.setFont("helvetica","normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(100,100,100);
+    const name = i===0?(violation.assignedHOD||"HOD"):i===1?((issuedBy||{}).name||"HR Manager"):"GM Operations";
+    doc.text(name, x+sigW/2, y+18, {align:"center"});
+    doc.text(s, x+sigW/2, y+22, {align:"center"});
+  });
+
+  // Footer
+  doc.setFillColor(13,27,42);
+  doc.rect(0,287,W,10,"F");
+  doc.setFont("helvetica","normal");
+  doc.setFontSize(7);
+  doc.setTextColor(255,255,255);
+  doc.text(`${COMPANY_NAME} | PVMS v${APP_VERSION} | Generated: ${new Date().toLocaleString("en-IN")} | ${refNo}`, W/2, 293, {align:"center"});
+
+  const filename = `WarningLetter_${violation.empName?.replace(/\s+/g,"_")}_${violation.id}.pdf`;
+  doc.save(filename);
+  if(toast) toast("Warning letter PDF downloaded","success");
+}
+
+function exportDashboardPDF(violations, users) {
+  const { jsPDF } = window.jspdf;
+  if (!jsPDF) return;
+  const doc = new jsPDF();
+  const W=210, ml=15;
+
+  doc.setFillColor(13,27,42);
+  doc.rect(0,0,W,26,"F");
+  try { doc.addImage(LOGO_B64,"JPEG",ml,4,55,14); } catch(e) {
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(11);
+    doc.text(COMPANY_NAME, ml, 11);
+  }
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","normal");
+  doc.setFontSize(7.5);
+  doc.text("Process Violation Management System  Dashboard Report", W/2, 18, {align:"center"});
+  doc.setFontSize(7);
+  doc.text(`${ISO_CERTS} | ${new Date().toLocaleDateString("en-IN",{dateStyle:"long"})}`, W/2, 24, {align:"center"});
+
+  let y = 30;
+  const kpis = [
+    ["Total Violations", violations.length],
+    ["Open Cases", violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length],
+    ["Closed Cases", violations.filter(v=>v.status==="Closed").length],
+    ["Critical (Active)", violations.filter(v=>v.severity==="Critical"&&v.status!=="Closed").length],
+    ["CAPA Pending", violations.filter(v=>v.status==="CAPA Pending").length],
+    ["Repeat Violations", violations.filter(v=>v.repeatViolation).length],
+  ];
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(11);
+  doc.setTextColor(13,27,42);
+  doc.text("Key Performance Indicators", ml, y); y+=8;
+  kpis.forEach(([k,v])=>{
+    doc.setFont("helvetica","normal");
+    doc.setFontSize(9);
+    doc.setTextColor(50,50,50);
+    doc.text(`${k}: ${v}`, ml+4, y); y+=6;
+  });
+  y+=4;
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(11);
+  doc.setTextColor(13,27,42);
+  doc.text("Violation Register", ml, y); y+=8;
+  const headers = ["Case ID","Date","Employee","Severity","Status"];
+  const colW = [38,22,42,22,34];
+  headers.forEach((h,i)=>{
+    doc.setFont("helvetica","bold");
+    doc.setFontSize(8);
+    doc.setTextColor(80,80,80);
+    doc.text(h, ml+colW.slice(0,i).reduce((a,b)=>a+b,0), y);
+  });
+  y+=5;
+  doc.setLineWidth(.2);
+  doc.setDrawColor(200,200,200);
+  doc.line(ml,y,195,y); y+=3;
+  violations.slice(-15).reverse().forEach(v=>{
+    const row=[v.id,v.date,v.empName?.slice(0,18)||"",v.severity,v.status];
+    row.forEach((cell,i)=>{
+      doc.setFont("helvetica","normal");
+      doc.setFontSize(8);
+      doc.setTextColor(40,40,40);
+      doc.text(String(cell), ml+colW.slice(0,i).reduce((a,b)=>a+b,0), y);
+    });
+    y+=6;
+    if(y>275){doc.addPage();y=20;}
+  });
+  doc.save(`PVMS_Dashboard_${new Date().toISOString().slice(0,10)}.pdf`);
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+function App() {
+  const [user, setUser] = useState(null);
+  const [page, setPage] = useState("dashboard");
+  const [editId, setEditId] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+
+  useEffect(() => { seedIfEmpty(); setNotifications(DB.get("notifications",[]) || []); }, []);
+
+  const toast = useCallback((text, type="info") => {
+    const id = Date.now();
+    setToasts(t=>[...t, {id, text, type}]);
+    setTimeout(() => setToasts(t=>t.filter(x=>x.id!==id)), 4000);
+  }, []);
+
+  const dismissToast = (id) => setToasts(t=>t.filter(x=>x.id!==id));
+
+  const handleSetPage = useCallback((p) => {
+    if (p !== "viewcase" && p !== "newcase") setEditId(null);
+    setPage(p);
+    window.scrollTo(0,0);
+  }, []);
+
+  const handleLogout = () => {
+    if (window.confirm("Sign out of PVMS?")) setUser(null);
+  };
+
+  if (!user) return (
+    <>
+      <LoginPage onLogin={setUser}/>
+      <ToastContainer toasts={toasts} dismiss={dismissToast}/>
+    </>
+  );
+
+  const pageProps = { user, toast, setPage:handleSetPage, setEditId, editId };
+
+  const pageMap = {
+    dashboard: <DashboardPage {...pageProps}/>,
+    cases:     <CasesPage {...pageProps}/>,
+    newcase:   <CaseFormPage {...pageProps}/>,
+    viewcase:  <ViewCasePage {...pageProps}/>,
+    investigation: <InvestigationPage {...pageProps}/>,
+    disciplinary:  <DisciplinaryPage {...pageProps}/>,
+    warning:       <WarningLettersPage {...pageProps}/>,
+    reports:       <ReportsPage {...pageProps}/>,
+    employees:     <EmployeesPage {...pageProps}/>,
+    masters:       <MasterDataPage {...pageProps}/>,
+    email:         <EmailIntegrationPage {...pageProps}/>,
+    audit:         <AuditTrailPage {...pageProps}/>,
+    users:         <UsersPage {...pageProps}/>,
+  };
+
+  return (
+    <>
+      <div className="portal" style={{display:"flex",height:"100vh",overflow:"hidden"}}>
+        <Sidebar active={page} setPage={handleSetPage} user={user} notifCount={notifications.filter(n=>!n.read).length}/>
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
+          <Topbar page={page} user={user} notifications={notifications} setPage={handleSetPage} onLogout={handleLogout}/>
+          <div style={{flex:1,overflowY:"auto",padding:"22px 24px",background:"var(--bg)"}}>
+            {pageMap[page] || pageMap.dashboard}
+          </div>
+        </div>
+      </div>
+      <ToastContainer toasts={toasts} dismiss={dismissToast}/>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
+
+
+
+
