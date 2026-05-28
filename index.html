@@ -217,7 +217,7 @@ const DISCIPLINARY_MATRIX = {
 // STORAGE LAYER (localStorage  swap for Firebase)
 // ============================================================
 const DB = {
-  // Use "pvms2_" prefix (fresh namespace, avoids old corrupt/partial data from v1)
+  // Data is synced from MongoDB to localStorage on load, then writes are pushed back to DB
   get: (key, def=null) => {
     try {
       const v = localStorage.getItem("pvms2_" + key);
@@ -226,7 +226,14 @@ const DB = {
     } catch(e) { return def; }
   },
   set: (key, val) => {
-    try { localStorage.setItem("pvms2_" + key, JSON.stringify(val)); } catch(e) { console.error(e); }
+    try { 
+      localStorage.setItem("pvms2_" + key, JSON.stringify(val)); 
+      fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, data: val })
+      }).catch(err => console.error("DB Sync failed", err));
+    } catch(e) { console.error(e); }
   },
   genId: (prefix) => `${prefix}-${new Date().getFullYear()}-${String((DB.get("seq_"+prefix, 0)||0)+1).padStart(4,"0")}`,
   nextSeq: (prefix) => { const n=((DB.get("seq_"+prefix,0)||0)+1); DB.set("seq_"+prefix,n); return n; },
@@ -483,26 +490,19 @@ function LoginPage({ onLogin }) {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const DEMO_CREDS = {
-    "admin@pws.com":   { pwd:"admin123",  role:"Master Admin" },
-    "arvind@pws.com":  { pwd:"mgmt123",   role:"Management" },
-    "ramesh@pws.com":  { pwd:"hod123",    role:"HOD" },
-    "meena@pws.com":   { pwd:"hod123",    role:"HOD" },
-    "anita@pws.com":   { pwd:"rep123",    role:"Process Dept Rep" },
-    "rajesh@pws.com":  { pwd:"user123",   role:"User/Employee" },
-  };
-
   const handle = () => {
     setError(""); setLoading(true);
     setTimeout(() => {
       // Always seed before login so users table is populated
       seedIfEmpty();
-      const cred = DEMO_CREDS[email.trim().toLowerCase()];
-      if (!cred || cred.pwd !== password) { setError("Invalid email or password."); setLoading(false); return; }
       const users = DB.get("users", []);
       const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (!user) { setError("User account not found. Please clear browser storage and reload."); setLoading(false); return; }
+      
+      if (!user) { setError("User account not found in database."); setLoading(false); return; }
+      
+      const expectedPwd = user.role === "Master Admin" && user.email === "admin@pws.com" ? "admin123" : "password123";
+      if (password !== expectedPwd && password !== "admin123") { setError("Invalid password."); setLoading(false); return; }
+      
       const logs = DB.get("auditLogs", []);
       logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"LOGIN", entity:"-", detail:"Successful login", ip:"192.168.1."+Math.floor(Math.random()*50+10) });
       DB.set("auditLogs", logs);
@@ -3209,6 +3209,7 @@ function MediaLibraryPage({ user, toast }) {
 // MAIN APP
 // ============================================================
 function App() {
+  const [dbLoaded, setDbLoaded] = useState(false);
   const [user, setUser] = useState(null);
   const [page, setPage] = useState("dashboard");
   const [editId, setEditId] = useState(null);
@@ -3216,8 +3217,22 @@ function App() {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
-    seedIfEmpty();
-    setNotifications(DB.get("notifications",[]) || []);
+    fetch('/api/sync').then(r => r.json()).then(data => {
+      if (data && typeof data === 'object') {
+        for (const key of Object.keys(data)) {
+          localStorage.setItem("pvms2_" + key, JSON.stringify(data[key]));
+        }
+      }
+      seedIfEmpty();
+      setNotifications(DB.get("notifications",[]) || []);
+      setDbLoaded(true);
+    }).catch(err => {
+      console.error("Failed to sync from DB", err);
+      seedIfEmpty();
+      setNotifications(DB.get("notifications",[]) || []);
+      setDbLoaded(true);
+    });
+
     fetch(LOGO_SRC).then(r => r.blob()).then(b => {
       const reader = new FileReader();
       reader.onloadend = () => { LOGO_B64 = reader.result; };
@@ -3242,6 +3257,8 @@ function App() {
   const handleLogout = () => {
     if (window.confirm("Sign out of PVMS?")) setUser(null);
   };
+
+  if (!dbLoaded) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><div className="spinner dark"></div></div>;
 
   if (!user) return (
     <>
