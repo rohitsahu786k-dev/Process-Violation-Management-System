@@ -21,11 +21,12 @@ function createTransporter() {
   });
 }
 
-async function sendEmail({ to, subject, html }) {
+async function sendEmail({ to, cc, subject, html }) {
   const transporter = createTransporter();
   return transporter.sendMail({
     from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
     to,
+    cc,
     subject,
     html
   });

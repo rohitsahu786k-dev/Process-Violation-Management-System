@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -146,6 +146,30 @@ async function mediaApi(path, options = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText || "Request failed");
   return data;
+}
+
+async function notifyCaseEvent(eventType, violation) {
+  try {
+    const users = DB.get("users", []);
+    const emp = users.find(u => u.name === violation.empName || u.id === violation.empId);
+    if (!emp) return;
+    const hod = users.find(u => u.name === violation.assignedHOD);
+    const mng = users.filter(u => u.role === "Management").map(u => u.email).filter(Boolean);
+    let cc = mng;
+    if (hod && hod.email) cc.push(hod.email);
+    const ccString = [...new Set(cc)].join(",");
+
+    const template = {
+      subject: eventType === "Registered" ? `New Case Registered: ${violation.id}` : `Case Closed: ${violation.id}`,
+      body: `Dear ${emp.name},\n\nYour case has been ${eventType}.\n\nCase ID: ${violation.id}\nCategory: ${violation.category}\nSeverity: ${violation.severity}\n\nPlease check the portal for more details.\n\nRegards,\nPVMS Automation System`
+    };
+
+    await fetch("/api/email/notification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: emp.email, cc: ccString, template })
+    });
+  } catch (err) { console.error("notifyCaseEvent failed", err); }
 }
 
 // ============================================================
@@ -893,6 +917,9 @@ function CasesPage({ user, setPage, setEditId, toast }) {
       DB.set("violations", vs);
       setViolations([...vs]);
       toast(`Case ${id} status updated to ${status}`, "success");
+      if (status === "Closed") {
+        notifyCaseEvent("Closed", vs[idx]);
+      }
     }
   };
 
@@ -1077,6 +1104,9 @@ function CaseFormPage({ user, toast, setPage, editId }) {
           if (ui>=0) { us[ui].complianceScore = Math.max(0, (us[ui].complianceScore||100)+sevScore); us[ui].violations=(us[ui].violations||0)+1; DB.set("users",us); }
         }
         toast(isDraft ? "Draft saved" : `Case ${id} submitted for review`, "success");
+        if (!isDraft) {
+          notifyCaseEvent("Registered", newCase);
+        }
       }
       setSaving(false);
       setPage("cases");
@@ -1331,7 +1361,10 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     log.push({action:`Status${status}`,by:user.name,at:Date.now()});
     updateCase({status, auditLog:log});
     if(status==="Verification Pending") toast("Case moved to Verification Pending","success");
-    if(status==="Closed") toast("Case closed successfully","success");
+    if(status==="Closed") {
+      toast("Case closed successfully","success");
+      notifyCaseEvent("Closed", violation);
+    }
     if(status==="CAPA Pending") toast("Case moved to CAPA Pending","success");
   };
 
@@ -2160,9 +2193,9 @@ function EmailIntegrationPage({ user, toast }) {
     },
     {
       id:"summary",
-      name:"Daily Summary",
-      subject:"PVMS Daily Summary - {{summaryDate}}",
-      body:"Dear {{userName}},\n\nDaily PVMS summary:\n\nOpen Violations: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed Today: {{closedCount}}\n\nRegards,\nPVMS Automation System"
+      name:"Monthly Summary",
+      subject:"PVMS Monthly Summary - {{summaryMonth}}",
+      body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Violations: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
     }
   ];
   const [templates, setTemplates] = useState(()=>DB.get("emailTemplates") || defaultTemplates);
