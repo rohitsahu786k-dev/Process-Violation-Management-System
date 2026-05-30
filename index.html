@@ -16,10 +16,10 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --navy:#0D1B2A;--blue:#1B6EF3;--blue-l:#EBF3FF;
-  --line:#E4EAF2;--line2:#C8D4E6;
-  --bg:#F5F7FB;--bg2:#EDF0F7;--bg3:#FFFFFF;
-  --text:#0D1B2A;--text2:#334B6C;--text3:#6B7E9A;
+  --navy:#0D1B2A;--blue:#E31E24;--blue-l:#FFE5E5;
+  --line:#E5E7EB;--line2:#D1D5DB;
+  --bg:#FFFFFF;--bg2:#F3F4F6;--bg3:#FFFFFF;
+  --text:#1F2937;--text2:#374151;--text3:#6B7280;
   --green:#0A6E3F;--green-bg:#E4F5EE;--green-bd:#A8DBBE;
   --amber:#915400;--amber-bg:#FEF3D0;--amber-bd:#F5C842;
   --red:#B91C1C;--red-bg:#FEE8E8;--red-bd:#F9A0A0;
@@ -27,18 +27,18 @@
   --cyan:#0A6E7A;
   --font:'Be Vietnam Pro',sans-serif;--mono:'JetBrains Mono',monospace;
   --r:6px;--r2:10px;--r3:14px;
-  --sh:0 1px 3px rgba(13,27,42,.07),0 4px 16px rgba(13,27,42,.05);
-  --sh2:0 2px 8px rgba(13,27,42,.10),0 8px 32px rgba(13,27,42,.07);
+  --sh:0 1px 3px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04);
+  --sh2:0 2px 8px rgba(0,0,0,.08),0 8px 32px rgba(0,0,0,.05);
 }
 html,body,#root{height:100%;overflow:hidden;font-family:var(--font)}
-body{background:var(--bg);color:var(--text);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+body{background:#F9FAFB;color:#1F2937;font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
 input,select,textarea,button{font-family:var(--font);font-size:13px}
 button{cursor:pointer}
 .toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.toast{background:var(--bg3);border:1px solid var(--line);border-radius:var(--r2);padding:10px 14px;box-shadow:var(--sh2);display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);pointer-events:all;animation:slideIn .2s ease;min-width:260px;max-width:360px}
+.toast{background:#FFFFFF;border:1px solid var(--line);border-radius:var(--r2);padding:10px 14px;box-shadow:var(--sh2);display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);pointer-events:all;animation:slideIn .2s ease;min-width:260px;max-width:360px}
 .toast.success{border-left:3px solid var(--green)}
 .toast.error{border-left:3px solid var(--red)}
 .toast.warning{border-left:3px solid #D97706}
@@ -70,9 +70,33 @@ button{cursor:pointer}
 
 const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
 const ASSET_PREFIX = (typeof window !== "undefined" && window.location.protocol === "file:") ? "assests/" : "/assests/";
-const LOGO_SRC = ASSET_PREFIX + "onepws-logo-transparent.png";
-const LOGO_DARK_SRC = ASSET_PREFIX + "onepws-dark-logo-scaled.png";
+const LOGO_SRC = ASSET_PREFIX + "onepws-dark-logo-scaled.png";
+const LOGO_DARK_SRC = LOGO_SRC;
 let LOGO_B64 = LOGO_SRC;
+
+function cacheLogoForPdf(src) {
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      LOGO_B64 = canvas.toDataURL("image/png");
+    } catch (err) {
+      LOGO_B64 = src;
+    }
+  };
+  img.onerror = () => { LOGO_B64 = src; };
+  img.src = src;
+}
+
+function pdfImageFormat(dataUrl) {
+  if (String(dataUrl).startsWith("data:image/png")) return "PNG";
+  if (String(dataUrl).startsWith("data:image/webp")) return "WEBP";
+  return "JPEG";
+}
 
 // ============================================================
 // ICON SYSTEM (SVG — replaces emojis / short codes)
@@ -241,8 +265,8 @@ const DB = {
     } catch(e) { return def; }
   },
   set: (key, val) => {
-    try { 
-      localStorage.setItem("pvms2_" + key, JSON.stringify(val)); 
+    try {
+      localStorage.setItem("pvms2_" + key, JSON.stringify(val));
       fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -329,9 +353,9 @@ function Btn({ children, onClick, variant="default", size="md", icon, disabled, 
 function FormGroup({ label, required, children, error }) {
   return (
     <div style={{display:"flex",flexDirection:"column",gap:4}}>
-      {label && <label style={{fontSize:11,fontWeight:600,color:"var(--text2)",textTransform:"uppercase",letterSpacing:".04em"}}>{label}{required&&<span style={{color:"var(--red)",marginLeft:2}}>*</span>}</label>}
+      {label && <label style={{fontSize:11,fontWeight:600,color:"#374151",textTransform:"uppercase",letterSpacing:".04em"}}>{label}{required&&<span style={{color:"#E31E24",marginLeft:2}}>*</span>}</label>}
       {children}
-      {error && <span style={{fontSize:11,color:"var(--red)"}}>{error}</span>}
+      {error && <span style={{fontSize:11,color:"#E31E24"}}>{error}</span>}
     </div>
   );
 }
@@ -339,9 +363,9 @@ function FormGroup({ label, required, children, error }) {
 function Input({ value, onChange, placeholder, type="text", style={}, min, max, onKeyDown, onFocus: onFocusProp }) {
   return <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} min={min} max={max}
     onKeyDown={onKeyDown}
-    style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"var(--text)",outline:"none",width:"100%",...style}}
-    onFocus={e=>{e.target.style.borderColor="var(--blue)";onFocusProp&&onFocusProp(e);}}
-    onBlur={e=>e.target.style.borderColor="var(--line)"}
+    style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"#1F2937",outline:"none",width:"100%",...style}}
+    onFocus={e=>{e.target.style.borderColor="#E31E24";onFocusProp&&onFocusProp(e);}}
+    onBlur={e=>e.target.style.borderColor="#E5E7EB"}
   />;
 }
 
@@ -360,24 +384,24 @@ function Select({ value, onChange, options, placeholder, style={} }) {
 
 function Textarea({ value, onChange, placeholder, rows=3 }) {
   return <textarea value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows}
-    style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"var(--text)",outline:"none",width:"100%",resize:"vertical",lineHeight:1.5}}
-    onFocus={e=>e.target.style.borderColor="var(--blue)"}
-    onBlur={e=>e.target.style.borderColor="var(--line)"}
+    style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"#1F2937",outline:"none",width:"100%",resize:"vertical",lineHeight:1.5}}
+    onFocus={e=>e.target.style.borderColor="#E31E24"}
+    onBlur={e=>e.target.style.borderColor="#E5E7EB"}
   />;
 }
 
 function Card({ children, style={} }) {
-  return <div style={{background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:"var(--r2)",boxShadow:"var(--sh)",...style}}>{children}</div>;
+  return <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:"var(--r2)",boxShadow:"0 1px 3px rgba(0,0,0,0.05)",...style}}>{children}</div>;
 }
 
 function CardHeader({ title, subtitle, actions, icon }) {
   return (
-    <div style={{padding:"14px 18px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+    <div style={{padding:"14px 18px",borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
       <div style={{display:"flex",alignItems:"center",gap:8}}>
-        {icon && <span style={{color:"var(--blue)",fontSize:16}}>{icon}</span>}
+        {icon && <span style={{color:"#E31E24",fontSize:16}}>{icon}</span>}
         <div>
-          <div style={{fontSize:13.5,fontWeight:600,color:"var(--text)"}}>{title}</div>
-          {subtitle && <div style={{fontSize:11,color:"var(--text3)",marginTop:1}}>{subtitle}</div>}
+          <div style={{fontSize:13.5,fontWeight:600,color:"#1F2937"}}>{title}</div>
+          {subtitle && <div style={{fontSize:11,color:"#6B7280",marginTop:1}}>{subtitle}</div>}
         </div>
       </div>
       {actions && <div style={{display:"flex",gap:6,alignItems:"center"}}>{actions}</div>}
@@ -390,13 +414,13 @@ function KpiCard({ label, value, sub, color="#1B6EF3", icon, trend, trendDir }) 
     <Card style={{position:"relative",overflow:"hidden"}}>
       <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:color}}/>
       <div style={{padding:"14px 16px 12px"}}>
-        <div style={{fontSize:11,fontWeight:500,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
+        <div style={{fontSize:11,fontWeight:500,color:"#6B7280",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
           {icon && <span>{icon}</span>}{label}
         </div>
-        <div style={{fontSize:28,fontWeight:700,color:"var(--text)",fontFamily:"var(--mono)",letterSpacing:"-.02em",lineHeight:1}}>{value}</div>
+        <div style={{fontSize:28,fontWeight:700,color:"#1F2937",fontFamily:"var(--mono)",letterSpacing:"-.02em",lineHeight:1}}>{value}</div>
         {(sub||trend) && (
-          <div style={{fontSize:11,color:"var(--text3)",marginTop:6,display:"flex",alignItems:"center",gap:5}}>
-            {trend && <span style={{display:"inline-flex",alignItems:"center",gap:2,fontSize:11,fontWeight:500,padding:"1px 5px",borderRadius:4,background:trendDir==="up"?"var(--red-bg)":"var(--green-bg)",color:trendDir==="up"?"var(--red)":"var(--green)"}}><Icon name={trendDir==="up"?"arrow-up":"arrow-down"} size={12}/> {trend}</span>}
+          <div style={{fontSize:11,color:"#6B7280",marginTop:6,display:"flex",alignItems:"center",gap:5}}>
+            {trend && <span style={{display:"inline-flex",alignItems:"center",gap:2,fontSize:11,fontWeight:500,padding:"1px 5px",borderRadius:4,background:trendDir==="up"?"#FEE8E8":"#E4F5EE",color:trendDir==="up"?"#E31E24":"#0A6E3F"}}><Icon name={trendDir==="up"?"arrow-up":"arrow-down"} size={12}/> {trend}</span>}
             {sub}
           </div>
         )}
@@ -512,32 +536,33 @@ function LoginPage({ onLogin }) {
       seedIfEmpty();
       const users = DB.get("users", []);
       const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-      
+
       if (!user) { setError("User account not found in database."); setLoading(false); return; }
-      
+
       const expectedPwd = user.role === "Master Admin" && user.email === "admin@pws.com" ? "admin123" : "password123";
       if (password !== expectedPwd && password !== "admin123") { setError("Invalid password."); setLoading(false); return; }
-      
+
       const logs = DB.get("auditLogs", []);
       logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"LOGIN", entity:"-", detail:"Successful login", ip:"192.168.1."+Math.floor(Math.random()*50+10) });
       DB.set("auditLogs", logs);
+      DB.set("currentUser", user);
       onLogin(user);
     }, 600);
   };
 
   return (
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg, #0D1B2A 0%, #1B3A6B 100%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div style={{minHeight:"100vh",background:"#F9FAFB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
       <div style={{width:"100%",maxWidth:420}}>
         {/* Logo */}
         <div style={{textAlign:"center",marginBottom:28}}>
-          <img src={LOGO_DARK_SRC} alt="ONEPWS Logo" style={{width:220,height:"auto",marginBottom:14,borderRadius:8}}/>
-          <p style={{fontSize:13,color:"rgba(255,255,255,.6)",marginTop:4,fontWeight:500}}>Process Violation Management System</p>
-          <p style={{fontSize:10.5,color:"var(--text3)",marginTop:3,letterSpacing:".03em"}}>{ISO_CERTS}</p>
+          <img src={LOGO_DARK_SRC} alt="ONEPWS Logo" style={{width:"100%",maxWidth:280,height:"auto",marginBottom:14}}/>
+          <p style={{fontSize:13,color:"#374151",marginTop:4,fontWeight:500}}>Process Violation Management System</p>
+          <p style={{fontSize:10.5,color:"#6B7280",marginTop:3,letterSpacing:".03em"}}>{ISO_CERTS}</p>
         </div>
 
         {/* Card */}
-        <div style={{background:"rgba(255,255,255,.97)",borderRadius:14,boxShadow:"0 20px 60px rgba(0,0,0,.35)",padding:32}}>
-          <h2 style={{fontSize:16,fontWeight:600,color:"var(--text)",marginBottom:20}}>Sign in to your account</h2>
+        <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:14,boxShadow:"0 4px 24px rgba(0,0,0,0.08)",padding:32}}>
+          <h2 style={{fontSize:16,fontWeight:600,color:"#1F2937",marginBottom:20}}>Sign in to your account</h2>
 
           {error && <div style={{background:"var(--red-bg)",border:"1px solid var(--red-bd)",borderRadius:"var(--r)",padding:"8px 12px",color:"var(--red)",fontSize:13,marginBottom:16}}>{error}</div>}
 
@@ -554,7 +579,7 @@ function LoginPage({ onLogin }) {
             <Btn variant="primary" onClick={handle} loading={loading} style={{width:"100%",justifyContent:"center",padding:"9px 0",fontSize:14}}>Sign In</Btn>
           </div></div>
 
-        <p style={{textAlign:"center",color:"var(--text3)",fontSize:11,marginTop:16}}>{ISO_CERTS}</p>
+        <p style={{textAlign:"center",color:"#6B7280",fontSize:11,marginTop:16}}>{ISO_CERTS}</p>
       </div>
     </div>
   );
@@ -589,21 +614,14 @@ function Sidebar({ active, setPage, user, notifCount }) {
   const investigationCount = violations.filter(v => ["Under Investigation","CAPA Pending","Verification Pending"].includes(v.status)).length;
 
   return (
-    <nav style={{width:w,background:"#fff",borderRight:"1px solid var(--line)",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",overflowX:"hidden",transition:"width .2s ease",height:"100vh",position:"relative"}}>
-      {/* Logo */}
-      <div style={{padding:"10px 10px 10px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",gap:8,flexShrink:0,minHeight:50}}>
+    <nav style={{width:w,background:"#FFFFFF",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",overflowX:"hidden",transition:"width .2s ease",height:"100vh",position:"relative"}}>
+      {/* Logo - full width, no extra gaps */}
+      <div style={{padding:"6px 0",borderBottom:"1px solid #E5E7EB",display:"flex",alignItems:"center",flexShrink:0,minHeight:50}}>
         {collapsed ? (
-          <img src={LOGO_DARK_SRC} alt="ONEPWS" title="Expand menu" onClick={()=>setCollapsed(false)} style={{width:32,height:32,objectFit:"contain",cursor:"pointer",flexShrink:0}}/>
+          <img src={LOGO_DARK_SRC} alt="ONEPWS" title="Expand menu" onClick={()=>setCollapsed(false)} style={{width:w-4,height:38,objectFit:"contain",cursor:"pointer",margin:"0 auto"}}/>
         ) : (
-          <img src={LOGO_DARK_SRC} alt="ONEPWS" style={{height:34,maxWidth:160,objectFit:"contain",flexShrink:0}}/>
+          <img src={LOGO_DARK_SRC} alt="ONEPWS" style={{height:42,width:"100%",objectFit:"contain",padding:"0 2px"}}/>
         )}
-        {/* Toggle button  always visible */}
-        <button onClick={()=>setCollapsed(!collapsed)}
-          style={{marginLeft:"auto",width:24,height:24,background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:4,color:"var(--text3)",cursor:"pointer",fontSize:14,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",transition:"background .15s"}}
-          onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"}
-          onMouseLeave={e=>e.currentTarget.style.background="var(--bg3)"}
-          title={collapsed?"Expand sidebar":"Collapse sidebar"}
-        ><Icon name={collapsed?"chevron-right":"chevron-left"} size={14}/></button>
       </div>
 
       {/* Nav */}
@@ -630,6 +648,16 @@ function Sidebar({ active, setPage, user, notifCount }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Collapse toggle */}
+      <div style={{padding:"8px 10px",borderTop:"1px solid var(--line)",flexShrink:0}}>
+        <button onClick={()=>setCollapsed(!collapsed)}
+          style={{width:"100%",padding:"5px 8px",background:"var(--bg2)",border:"1px solid var(--line)",borderRadius:4,color:"var(--text3)",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .15s"}}
+          onMouseEnter={e=>e.currentTarget.style.background="var(--line)"}
+          onMouseLeave={e=>e.currentTarget.style.background="var(--bg2)"}
+          title={collapsed?"Expand sidebar":"Collapse sidebar"}
+        ><Icon name={collapsed?"chevron-right":"chevron-left"} size={14}/>{!collapsed && <span>Collapse</span>}</button>
       </div>
 
       {/* Footer */}
@@ -667,12 +695,12 @@ function Topbar({ page, user, notifications, setPage, onLogout }) {
   };
 
   return (
-    <div style={{background:"var(--bg3)",borderBottom:"1px solid var(--line)",padding:"0 20px",height:50,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,position:"relative",zIndex:100}}>
-      <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"var(--text3)"}}>
+    <div style={{background:"#FFFFFF",borderBottom:"1px solid #E5E7EB",padding:"0 20px",height:50,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,position:"relative",zIndex:100}}>
+      <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#6B7280"}}>
         {bc.map((s,i)=>(
           <span key={i} style={{display:"flex",alignItems:"center",gap:5}}>
-            {i>0&&<span style={{color:"var(--line2)",display:"flex"}}><Icon name="chevron-right" size={12}/></span>}
-            <span style={{color:i===bc.length-1?"var(--text)":"var(--text3)",fontWeight:i===bc.length-1?500:400}}>{s}</span>
+            {i>0&&<span style={{color:"#D1D5DB",display:"flex"}}><Icon name="chevron-right" size={12}/></span>}
+            <span style={{color:i===bc.length-1?"#1F2937":"#6B7280",fontWeight:i===bc.length-1?500:400}}>{s}</span>
           </span>
         ))}
       </div>
@@ -684,7 +712,7 @@ function Topbar({ page, user, notifications, setPage, onLogout }) {
             {unread>0 && <span style={{position:"absolute",top:4,right:4,width:9,height:9,background:"var(--red)",borderRadius:"50%",border:"2px solid var(--bg3)"}}/>}
           </button>
           {showNotif && (
-            <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,width:320,background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:var_r2,boxShadow:"var(--sh2)",zIndex:200}} onClick={e=>e.stopPropagation()}>
+            <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,width:320,background:"var(--bg3)",border:"1px solid var(--line)",borderRadius:"var(--r2)",boxShadow:"var(--sh2)",zIndex:200}} onClick={e=>e.stopPropagation()}>
               <div style={{padding:"12px 14px",borderBottom:"1px solid var(--line)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <span style={{fontWeight:600,fontSize:13}}>Notifications {unread>0&&<span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"1px 5px",borderRadius:8}}>+{unread}</span>}</span>
                 <button onClick={markAll} style={{fontSize:11,color:"var(--blue)",background:"none",border:"none",cursor:"pointer"}}>Mark all read</button>
@@ -749,6 +777,12 @@ function DashboardPage({ user, setPage }) {
     d.setMonth(d.getMonth()-(5-i));
     return d.toLocaleString("default",{month:"short"});
   });
+  const currentMonthCount = monthCounts[5] || 0;
+  const previousMonthCount = monthCounts[4] || 0;
+  const totalTrend = previousMonthCount
+    ? `${Math.abs(Math.round(((currentMonthCount - previousMonthCount) / previousMonthCount) * 100))}%`
+    : `${currentMonthCount} new`;
+  const totalTrendDir = currentMonthCount >= previousMonthCount ? "up" : "down";
 
   const recentCases = violations.slice(-5).reverse();
 
@@ -766,7 +800,7 @@ function DashboardPage({ user, setPage }) {
 
       {/* KPI Row */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
-        <KpiCard label="Total Violations" value={total} color="var(--blue)" sub="all registered cases"/>
+        <KpiCard label="Total Violations" value={total} color="var(--blue)" trend={totalTrend} trendDir={totalTrendDir} sub="vs previous month"/>
         <KpiCard label="Open Cases" value={open} color="var(--red)" trend={`${open} active`} trendDir="up"/>
         <KpiCard label="Overdue CAPA" value={overdue} color="#D97706" sub="past due date"/>
         <KpiCard label="Closed Cases" value={closed} color="var(--green)" sub={`${Math.round(closed/Math.max(total,1)*100)}% closure rate`}/>
@@ -2716,23 +2750,20 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   const W=210, ml=22, mr=188, lw=mr-ml;
 
   // Header
-  doc.setFillColor(13,27,42);
+  doc.setFillColor(13,13,13);
   doc.rect(0,0,W,30,"F");
-  // Add logo image (white version)
-  try { doc.addImage(LOGO_B64, LOGO_B64.startsWith("data:image/png") ? "PNG" : "JPEG", ml,4,48,14); } catch(e) {
-    // fallback to text if image fails
+  doc.setFillColor(227,30,36); doc.rect(0,30,W,1,"F");
+  // Add logo image
+  try { doc.addImage(LOGO_B64, pdfImageFormat(LOGO_B64), ml,6,48,14); } catch(e) {
     doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
-    doc.text(COMPANY_NAME.toUpperCase(),W/2,12,{align:"center"});
+    doc.text("ONEPWS", ml, 14);
   }
   doc.setTextColor(255,255,255);
-  doc.setFont("helvetica","bold");
-  doc.setFontSize(11);
-  doc.text(COMPANY_NAME, W/2, 11, {align:"center"});
   doc.setFont("helvetica","normal");
   doc.setFontSize(7.5);
-  doc.text(ISO_CERTS, W/2, 22, {align:"center"});
+  doc.text(ISO_CERTS, mr, 12, {align:"right"});
   doc.setFontSize(7);
-  doc.text("Confidential | HR Document | Not for External Distribution", W/2, 27, {align:"center"});
+  doc.text("Confidential | HR Document | Not for External Distribution", mr, 20, {align:"right"});
 
   // Ref line
   const refNo = "HR/WL/"+new Date().getFullYear()+"/"+violation.id.split("-").pop();
@@ -2849,7 +2880,7 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   });
 
   // Footer
-  doc.setFillColor(13,27,42);
+  doc.setFillColor(0,0,0);
   doc.rect(0,287,W,10,"F");
   doc.setFont("helvetica","normal");
   doc.setFontSize(7);
@@ -2914,23 +2945,25 @@ function exportDashboardPDF(violations, users) {
   const doc = new jsPDF();
   const W=210, ml=14, mr=196;
 
-  doc.setFillColor(13,27,42);
-  doc.rect(0,0,W,26,"F");
-  try { doc.addImage(LOGO_B64, LOGO_B64.startsWith("data:image/png") ? "PNG" : "JPEG", ml, 4, 55, 14); } catch(e) {
-    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(11);
-    doc.text(COMPANY_NAME, ml, 11);
+  // Professional header with logo only (no duplicate text)
+  doc.setFillColor(13,13,13);
+  doc.rect(0,0,W,28,"F");
+  // Red accent line
+  doc.setFillColor(227,30,36);
+  doc.rect(0,28,W,1.2,"F");
+  try { doc.addImage(LOGO_B64, pdfImageFormat(LOGO_B64), ml, 5, 50, 13); } catch(e) {
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(12);
+    doc.text("ONEPWS", ml, 14);
   }
   doc.setTextColor(255,255,255);
   doc.setFont("helvetica","bold");
-  doc.setFontSize(12);
-  doc.text(COMPANY_NAME, W/2, 10, {align:"center"});
+  doc.setFontSize(9.5);
+  doc.text("Process Violation Management System - Dashboard Report", mr, 12, {align:"right"});
   doc.setFont("helvetica","normal");
-  doc.setFontSize(8);
-  doc.text("Process Violation Management System - Dashboard Report", W/2, 18, {align:"center"});
   doc.setFontSize(7);
-  doc.text(`${ISO_CERTS} | Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"})}`, W/2, 24, {align:"center"});
+  doc.text(`${ISO_CERTS} | Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"})}`, mr, 19, {align:"right"});
 
-  let y = 34;
+  let y = 37;
   const kpis = [
     ["Total Violations", violations.length],
     ["Open Cases", violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length],
@@ -2941,31 +2974,35 @@ function exportDashboardPDF(violations, users) {
     ["Repeat Violations", violations.filter(v=>v.repeatViolation).length],
   ];
   doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(13,27,42);
-  doc.text("Key Performance Indicators", ml, y); y+=6;
-  const cardW = 42, cardH = 18;
+  doc.text("Key Performance Indicators", ml, y); y+=8;
+  const cardW = 43, cardH = 20;
   kpis.forEach(([k,v], i)=>{
     const x = ml + (i % 4) * 46;
-    const cy = y + Math.floor(i / 4) * 22;
-    doc.setDrawColor(210,220,235); doc.setFillColor(244,247,251);
-    doc.roundedRect(x, cy, cardW, cardH, 2, 2, "FD");
-    doc.setFont("helvetica","normal"); doc.setFontSize(6.8); doc.setTextColor(90,100,115);
-    doc.text(k, x+3, cy+6);
-    doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(13,27,42);
-    doc.text(String(v), x+3, cy+14);
+    const cy = y + Math.floor(i / 4) * 24;
+    doc.setDrawColor(220,225,235); doc.setFillColor(248,250,252);
+    doc.roundedRect(x, cy, cardW, cardH, 2.5, 2.5, "FD");
+    // Top accent line on card
+    doc.setFillColor(227,30,36); doc.rect(x, cy, cardW, 1.5, "F");
+    doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(100,110,125);
+    doc.text(k, x+3, cy+7.5);
+    doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(13,27,42);
+    doc.text(String(v), x+3, cy+15.5);
   });
-  y += Math.ceil(kpis.length / 4) * 22 + 4;
+  y += Math.ceil(kpis.length / 4) * 24 + 6;
 
   const drawSection = (title, headers, rows, widths) => {
     if (y > 250) { doc.addPage(); y = 18; }
-    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(13,27,42);
-    doc.text(title, ml, y); y += 6;
-    doc.setFillColor(235,241,249); doc.rect(ml, y, mr-ml, 7, "F");
+    doc.setFont("helvetica","bold"); doc.setFontSize(10.5); doc.setTextColor(13,27,42);
+    doc.text(title, ml, y); y += 2;
+    doc.setDrawColor(227,30,36); doc.setLineWidth(0.5); doc.line(ml, y, ml+30, y); y += 5;
+    doc.setFillColor(13,27,42); doc.rect(ml, y, mr-ml, 7, "F");
     let x = ml + 2;
-    headers.forEach((h,i)=>{ doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(70,80,95); doc.text(h, x, y+5); x += widths[i]; });
+    headers.forEach((h,i)=>{ doc.setFont("helvetica","bold"); doc.setFontSize(7); doc.setTextColor(255,255,255); doc.text(h, x, y+5); x += widths[i]; });
     y += 8;
     rows.forEach((row, idx)=>{
       if (y > 280) { doc.addPage(); y = 18; }
-      if (idx % 2 === 0) { doc.setFillColor(249,251,253); doc.rect(ml, y-1, mr-ml, 7, "F"); }
+      if (idx % 2 === 0) { doc.setFillColor(248,250,252); doc.rect(ml, y-1, mr-ml, 7, "F"); }
+      doc.setDrawColor(235,240,245); doc.setLineWidth(0.1); doc.line(ml, y+6, mr, y+6);
       let cx = ml + 2;
       row.forEach((cell,i)=>{
         const text = doc.splitTextToSize(String(cell ?? ""), widths[i]-2)[0] || "";
@@ -2975,7 +3012,7 @@ function exportDashboardPDF(violations, users) {
       });
       y += 7;
     });
-    y += 5;
+    y += 6;
   };
 
   const deptRows = DEPARTMENTS.map(d=>{
@@ -2990,10 +3027,14 @@ function exportDashboardPDF(violations, users) {
   const recentRows = violations.slice(-15).reverse().map(v=>[v.id, v.date, v.empName || "", v.severity, v.status]);
   drawSection("Recent Violation Register", ["Case ID","Date","Employee","Severity","Status"], recentRows, [36,24,56,28,34]);
 
+  // Professional footer
+  doc.setFillColor(13,13,13);
+  doc.rect(0,287,W,10,"F");
+  doc.setFillColor(227,30,36); doc.rect(0,287,W,0.8,"F");
   doc.setFont("helvetica","normal");
-  doc.setFontSize(7);
-  doc.setTextColor(110,120,130);
-  doc.text(`${COMPANY_NAME} | PVMS v${APP_VERSION}`, W/2, 290, {align:"center"});
+  doc.setFontSize(6.5);
+  doc.setTextColor(180,185,195);
+  doc.text(`PVMS v${APP_VERSION} | Confidential | Generated ${new Date().toLocaleString("en-IN")}`, W/2, 293, {align:"center"});
   doc.save(`PVMS_Dashboard_${new Date().toISOString().slice(0,10)}.pdf`);
 }
 
@@ -3328,7 +3369,7 @@ function MediaLibraryPage({ user, toast }) {
 // ============================================================
 function App() {
   const [dbLoaded, setDbLoaded] = useState(false);
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => DB.get("currentUser", null));
   const [page, setPage] = useState("dashboard");
   const [editId, setEditId] = useState(null);
   const [toasts, setToasts] = useState([]);
@@ -3337,12 +3378,19 @@ function App() {
   useEffect(() => {
     fetch('/api/sync').then(r => r.json()).then(data => {
       if (data && typeof data === 'object') {
+        // Preserve currentUser session across sync - don't overwrite with server data
+        const preservedUser = localStorage.getItem("pvms2_currentUser");
         for (const key of Object.keys(data)) {
+          if (key === 'currentUser') continue; // Never overwrite local session from server
           localStorage.setItem("pvms2_" + key, JSON.stringify(data[key]));
         }
+        if (preservedUser) localStorage.setItem("pvms2_currentUser", preservedUser);
       }
       seedIfEmpty();
       setNotifications(DB.get("notifications",[]) || []);
+      // Re-read user from localStorage after sync in case user data was updated
+      const syncedUser = DB.get("currentUser", null);
+      if (syncedUser) setUser(syncedUser);
       setDbLoaded(true);
     }).catch(err => {
       console.error("Failed to sync from DB", err);
@@ -3351,11 +3399,7 @@ function App() {
       setDbLoaded(true);
     });
 
-    fetch(LOGO_SRC).then(r => r.blob()).then(b => {
-      const reader = new FileReader();
-      reader.onloadend = () => { LOGO_B64 = reader.result; };
-      reader.readAsDataURL(b);
-    }).catch(() => {});
+    cacheLogoForPdf(LOGO_SRC);
   }, []);
 
   const toast = useCallback((text, type="info") => {
@@ -3373,7 +3417,7 @@ function App() {
   }, []);
 
   const handleLogout = () => {
-    if (window.confirm("Sign out of PVMS?")) setUser(null);
+    if (window.confirm("Sign out of PVMS?")) { setUser(null); DB.set("currentUser", null); }
   };
 
   if (!dbLoaded) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><div className="spinner dark"></div></div>;
@@ -3406,11 +3450,11 @@ function App() {
 
   return (
     <>
-      <div className="portal" style={{display:"flex",height:"100vh",overflow:"hidden"}}>
+      <div className="portal" style={{display:"flex",height:"100vh",overflow:"hidden",background:"#F9FAFB"}}>
         <Sidebar active={page} setPage={handleSetPage} user={user} notifCount={notifications.filter(n=>!n.read).length}/>
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
           <Topbar page={page} user={user} notifications={notifications} setPage={handleSetPage} onLogout={handleLogout}/>
-          <div style={{flex:1,overflowY:"auto",padding:"22px 24px",background:"var(--bg)"}}>
+          <div style={{flex:1,overflowY:"auto",padding:"22px 24px",background:"#F9FAFB"}}>
             {pageMap[page] || pageMap.dashboard}
           </div>
         </div>

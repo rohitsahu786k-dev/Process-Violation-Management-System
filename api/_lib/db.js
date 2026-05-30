@@ -7,8 +7,12 @@ async function getDb() {
   if (cachedDb) return cachedDb;
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error("MONGODB_URI is not configured");
-  cachedClient = cachedClient || new MongoClient(uri);
-  if (!cachedClient.topology || !cachedClient.topology.isConnected?.()) {
+  if (!cachedClient) {
+    cachedClient = new MongoClient(uri, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
     await cachedClient.connect();
   }
   cachedDb = cachedClient.db(process.env.MONGODB_DB || "pvms");
