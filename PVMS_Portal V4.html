@@ -72,7 +72,9 @@ const { useState, useEffect, useCallback, useRef, createContext, useContext } = 
 const ASSET_PREFIX = (typeof window !== "undefined" && window.location.protocol === "file:") ? "assests/" : "/assests/";
 const LOGO_SRC = ASSET_PREFIX + "onepws-dark-logo-scaled.png";
 const LOGO_DARK_SRC = LOGO_SRC;
+const LOGO_WHITE_SRC = ASSET_PREFIX + "onepws-logo-transparent.png";
 let LOGO_B64 = LOGO_SRC;
+let LOGO_WHITE_B64 = LOGO_WHITE_SRC;
 
 function cacheLogoForPdf(src) {
   const img = new Image();
@@ -89,6 +91,24 @@ function cacheLogoForPdf(src) {
     }
   };
   img.onerror = () => { LOGO_B64 = src; };
+  img.src = src;
+}
+
+function cacheWhiteLogoForPdf(src) {
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      LOGO_WHITE_B64 = canvas.toDataURL("image/png");
+    } catch (err) {
+      LOGO_WHITE_B64 = src;
+    }
+  };
+  img.onerror = () => { LOGO_WHITE_B64 = src; };
   img.src = src;
 }
 
@@ -2753,8 +2773,8 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   doc.setFillColor(13,13,13);
   doc.rect(0,0,W,30,"F");
   doc.setFillColor(227,30,36); doc.rect(0,30,W,1,"F");
-  // Add logo image
-  try { doc.addImage(LOGO_B64, pdfImageFormat(LOGO_B64), ml,6,48,14); } catch(e) {
+  // Add white logo for dark header
+  try { doc.addImage(LOGO_WHITE_B64, pdfImageFormat(LOGO_WHITE_B64), ml,6,48,14); } catch(e) {
     doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
     doc.text("ONEPWS", ml, 14);
   }
@@ -2951,7 +2971,7 @@ function exportDashboardPDF(violations, users) {
   // Red accent line
   doc.setFillColor(227,30,36);
   doc.rect(0,28,W,1.2,"F");
-  try { doc.addImage(LOGO_B64, pdfImageFormat(LOGO_B64), ml, 5, 50, 13); } catch(e) {
+  try { doc.addImage(LOGO_WHITE_B64, pdfImageFormat(LOGO_WHITE_B64), ml, 5, 50, 13); } catch(e) {
     doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(12);
     doc.text("ONEPWS", ml, 14);
   }
@@ -3400,6 +3420,7 @@ function App() {
     });
 
     cacheLogoForPdf(LOGO_SRC);
+    cacheWhiteLogoForPdf(LOGO_WHITE_SRC);
   }, []);
 
   const toast = useCallback((text, type="info") => {
