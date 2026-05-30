@@ -72,12 +72,13 @@ const { useState, useEffect, useCallback, useRef, createContext, useContext } = 
 const ASSET_PREFIX = (typeof window !== "undefined" && window.location.protocol === "file:") ? "assests/" : "/assests/";
 const LOGO_SRC = ASSET_PREFIX + "onepws-dark-logo-scaled.png";
 const LOGO_DARK_SRC = LOGO_SRC;
-const LOGO_WHITE_SRC = ASSET_PREFIX + "onepws-logo-white.png";
+const LOGO_WHITE_SRC = ASSET_PREFIX + "onepws-logo-transparent.png";
 let LOGO_B64 = LOGO_SRC;
-let LOGO_WHITE_B64 = LOGO_WHITE_SRC;
+let LOGO_WHITE_B64 = null;
 
 function cacheLogoForPdf(src) {
   const img = new Image();
+  img.crossOrigin = "anonymous";
   img.onload = () => {
     try {
       const canvas = document.createElement("canvas");
@@ -96,6 +97,7 @@ function cacheLogoForPdf(src) {
 
 function cacheWhiteLogoForPdf(src) {
   const img = new Image();
+  img.crossOrigin = "anonymous";
   img.onload = () => {
     try {
       const canvas = document.createElement("canvas");
@@ -2773,8 +2775,9 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   doc.setFillColor(13,13,13);
   doc.rect(0,0,W,30,"F");
   doc.setFillColor(227,30,36); doc.rect(0,30,W,1,"F");
-  // Add white logo for dark header
-  try { doc.addImage(LOGO_WHITE_B64, pdfImageFormat(LOGO_WHITE_B64), ml,6,48,14); } catch(e) {
+  // Add white logo for dark header (fallback to regular logo or text)
+  const wlLogo = LOGO_WHITE_B64 || LOGO_B64;
+  try { if(wlLogo) doc.addImage(wlLogo, pdfImageFormat(wlLogo), ml,6,48,14); else throw new Error("no logo"); } catch(e) {
     doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
     doc.text("ONEPWS", ml, 14);
   }
@@ -2971,7 +2974,8 @@ function exportDashboardPDF(violations, users) {
   // Red accent line
   doc.setFillColor(227,30,36);
   doc.rect(0,28,W,1.2,"F");
-  try { doc.addImage(LOGO_WHITE_B64, pdfImageFormat(LOGO_WHITE_B64), ml, 5, 50, 13); } catch(e) {
+  const dbLogo = LOGO_WHITE_B64 || LOGO_B64;
+  try { if(dbLogo) doc.addImage(dbLogo, pdfImageFormat(dbLogo), ml, 5, 50, 13); else throw new Error("no logo"); } catch(e) {
     doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(12);
     doc.text("ONEPWS", ml, 14);
   }
