@@ -78,7 +78,6 @@ let LOGO_WHITE_B64 = null;
 
 function cacheLogoForPdf(src) {
   const img = new Image();
-  img.crossOrigin = "anonymous";
   img.onload = () => {
     try {
       const canvas = document.createElement("canvas");
@@ -96,22 +95,32 @@ function cacheLogoForPdf(src) {
 }
 
 function cacheWhiteLogoForPdf(src) {
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.onload = () => {
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth || img.width;
-      canvas.height = img.naturalHeight || img.height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0);
-      LOGO_WHITE_B64 = canvas.toDataURL("image/png");
-    } catch (err) {
-      LOGO_WHITE_B64 = src;
-    }
-  };
-  img.onerror = () => { LOGO_WHITE_B64 = src; };
-  img.src = src;
+  // Use fetch to avoid CORS/tainted canvas issues on production
+  fetch(src)
+    .then(res => res.blob())
+    .then(blob => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // Convert to PNG via canvas for jsPDF compatibility (webp not supported)
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0);
+            LOGO_WHITE_B64 = canvas.toDataURL("image/png");
+          } catch(e) {
+            LOGO_WHITE_B64 = reader.result;
+          }
+        };
+        img.onerror = () => { LOGO_WHITE_B64 = reader.result; };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(blob);
+    })
+    .catch(() => { LOGO_WHITE_B64 = null; });
 }
 
 function pdfImageFormat(dataUrl) {
