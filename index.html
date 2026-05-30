@@ -148,26 +148,41 @@ async function mediaApi(path, options = {}) {
   return data;
 }
 
+function uniqueEmails(values) {
+  return [...new Set((values || [])
+    .flatMap(v => String(v || "").split(/[;,]/))
+    .map(v => v.trim().toLowerCase())
+    .filter(Boolean))];
+}
+
 async function notifyCaseEvent(eventType, violation) {
   try {
     const users = DB.get("users", []);
     const emp = users.find(u => u.name === violation.empName || u.id === violation.empId);
-    if (!emp) return;
-    const hod = users.find(u => u.name === violation.assignedHOD);
-    const mng = users.filter(u => u.role === "Management").map(u => u.email).filter(Boolean);
-    let cc = mng;
-    if (hod && hod.email) cc.push(hod.email);
-    const ccString = [...new Set(cc)].join(",");
+    const hod = users.find(u =>
+      u.name === violation.assignedHOD ||
+      (u.role === "HOD" && u.dept === violation.dept) ||
+      uniqueEmails([u.email]).includes(String(emp?.hodBuhEmail || "").toLowerCase())
+    );
+    const to = uniqueEmails([emp?.email, violation.email]);
+    if (!to.length) return;
+    const cc = uniqueEmails([
+      emp?.reportingToEmail,
+      emp?.hodBuhEmail,
+      emp?.managementEmail,
+      hod?.email,
+      ...users.filter(u => u.role === "Management").map(u => u.email),
+    ]).filter(email => !to.includes(email));
 
     const template = {
       subject: eventType === "Registered" ? `New Case Registered: ${violation.id}` : `Case Closed: ${violation.id}`,
-      body: `Dear ${emp.name},\n\nYour case has been ${eventType}.\n\nCase ID: ${violation.id}\nCategory: ${violation.category}\nSeverity: ${violation.severity}\n\nPlease check the portal for more details.\n\nRegards,\nPVMS Automation System`
+      body: `Dear ${emp?.name || violation.empName || "Employee"},\n\nYour case has been ${eventType}.\n\nCase ID: ${violation.id}\nCategory: ${violation.category}\nSeverity: ${violation.severity}\nStatus: ${eventType === "Closed" ? "Closed" : (violation.status || "Submitted")}\n\nPlease check the portal for more details.\n\nRegards,\nPVMS Automation System`
     };
 
     await fetch("/api/email/notification", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: emp.email, cc: ccString, template })
+      body: JSON.stringify({ to: to.join(","), cc: cc.join(","), template })
     });
   } catch (err) { console.error("notifyCaseEvent failed", err); }
 }
@@ -569,6 +584,9 @@ function Sidebar({ active, setPage, user, notifCount }) {
 
   const [collapsed, setCollapsed] = useState(false);
   const w = collapsed ? 52 : 232;
+  const violations = DB.get("violations", []);
+  const caseCount = violations.filter(v => !["Closed","Rejected","Archived"].includes(v.status)).length;
+  const investigationCount = violations.filter(v => ["Under Investigation","CAPA Pending","Verification Pending"].includes(v.status)).length;
 
   return (
     <nav style={{width:w,background:"#fff",borderRight:"1px solid var(--line)",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",overflowX:"hidden",transition:"width .2s ease",height:"100vh",position:"relative"}}>
@@ -605,8 +623,8 @@ function Sidebar({ active, setPage, user, notifCount }) {
                 >
                   <span style={{fontSize:14,flexShrink:0,display:"flex"}}><Icon name={item.icon} size={16} color={active===item.id?"var(--blue)":"var(--text3)"}/></span>
                   {!collapsed && <span style={{whiteSpace:"nowrap",overflow:"hidden",flex:1}}>{item.label}</span>}
-                  {!collapsed && item.id==="investigation" && <span style={{marginLeft:"auto",background:"#D97706",color:"#fff",fontSize:10,fontWeight:600,padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>5</span>}
-                  {!collapsed && item.id==="cases" && <span style={{marginLeft:"auto",background:"var(--red)",color:"#fff",fontSize:10,fontWeight:600,padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>8</span>}
+                  {!collapsed && item.id==="investigation" && investigationCount > 0 && <span style={{marginLeft:"auto",background:"#D97706",color:"#fff",fontSize:10,fontWeight:600,padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>{investigationCount}</span>}
+                  {!collapsed && item.id==="cases" && caseCount > 0 && <span style={{marginLeft:"auto",background:"var(--red)",color:"#fff",fontSize:10,fontWeight:600,padding:"1px 5px",borderRadius:8,fontFamily:"var(--mono)"}}>{caseCount}</span>}
                 </div>
               ))}
             </div>
@@ -748,7 +766,7 @@ function DashboardPage({ user, setPage }) {
 
       {/* KPI Row */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
-        <KpiCard label="Total Violations" value={total} color="var(--blue)" trend="8%" trendDir="up" sub="this period"/>
+        <KpiCard label="Total Violations" value={total} color="var(--blue)" sub="all registered cases"/>
         <KpiCard label="Open Cases" value={open} color="var(--red)" trend={`${open} active`} trendDir="up"/>
         <KpiCard label="Overdue CAPA" value={overdue} color="#D97706" sub="past due date"/>
         <KpiCard label="Closed Cases" value={closed} color="var(--green)" sub={`${Math.round(closed/Math.max(total,1)*100)}% closure rate`}/>
@@ -806,6 +824,7 @@ function DashboardPage({ user, setPage }) {
             <div style={{display:"flex",alignItems:"flex-end",gap:8,height:100}}>
               {monthCounts.map((v,i)=>(
                 <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                  <div style={{fontSize:10,fontFamily:"var(--mono)",fontWeight:600,color:v ? "var(--text2)" : "var(--text3)",height:12}}>{v}</div>
                   <div style={{width:"100%",height:`${Math.max(v/Math.max(...monthCounts,1)*80,4)}px`,background:i===5?"var(--blue)":"var(--line2)",borderRadius:"3px 3px 0 0",transition:"height .4s",minHeight:4}}/>
                   <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--mono)"}}>{monthLabels[i]}</div>
                 </div>
@@ -913,7 +932,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
     if (idx >= 0) {
       vs[idx].status = status;
       vs[idx].auditLog = vs[idx].auditLog || [];
-      vs[idx].auditLog.push({ action:`Status${status}`, by:user.name, at:Date.now() });
+      vs[idx].auditLog.push({ action:`Status changed to ${status}`, by:user.name, at:Date.now() });
       DB.set("violations", vs);
       setViolations([...vs]);
       toast(`Case ${id} status updated to ${status}`, "success");
@@ -1072,6 +1091,9 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     if (!form.severity) e.severity = "Required";
     if (!form.description || form.description.length < 10) e.description = "Please provide a detailed description (min 10 chars)";
     if (!form.rootCause) e.rootCause = "Required";
+    const risk = Number(form.riskScore);
+    if (!form.riskScore) e.riskScore = "Required";
+    else if (!Number.isInteger(risk) || risk < 1 || risk > 10) e.riskScore = "Enter a whole number from 1 to 10";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -1082,15 +1104,16 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     setTimeout(() => {
       const violations = DB.get("violations",[]);
       const sevScore = SEVERITY_CONFIG[form.severity]?.score || 0;
+      const cleanForm = { ...form, riskScore: form.riskScore ? Number(form.riskScore) : "" };
       if (isEdit) {
         const idx = violations.findIndex(v=>v.id===editId);
-        violations[idx] = { ...violations[idx], ...form, evidence, updatedBy:user.name, updatedAt:Date.now() };
+        violations[idx] = { ...violations[idx], ...cleanForm, evidence, updatedBy:user.name, updatedAt:Date.now() };
         DB.set("violations", violations);
         toast(`Case ${editId} updated`, "success");
       } else {
         DB.nextSeq("VMS");
         const id = DB.genId("VMS");
-        const newCase = { id, caseNo:DB.get("seq_VMS",1), ...form, evidence,
+        const newCase = { id, caseNo:DB.get("seq_VMS",1), ...cleanForm, evidence,
           status: isDraft ? "Draft" : "Submitted",
           createdBy: user.id, createdAt: Date.now(),
           capaActions:[], fiveWhy:[], auditLog:[{action:"Case Created",by:user.name,at:Date.now()}]
@@ -1191,8 +1214,8 @@ function CaseFormPage({ user, toast, setPage, editId }) {
               <FormGroup label="Root Cause Category" required error={errors.rootCause}>
                 <Select value={form.rootCause} onChange={v=>set("rootCause",v)} options={activeRCs} placeholder="Select root cause"/>
               </FormGroup>
-              <FormGroup label="Risk Score (110)">
-                <Input type="number" value={form.riskScore} onChange={v=>set("riskScore",v)} min="1" max="10" placeholder="110"/>
+              <FormGroup label="Risk Score (1-10)" required error={errors.riskScore}>
+                <Input type="number" value={form.riskScore} onChange={v=>set("riskScore",v)} min="1" max="10" placeholder="1 lowest, 10 highest"/>
               </FormGroup>
               <FormGroup label="Immediate Action Taken">
                 <Textarea value={form.immediateAction} onChange={v=>set("immediateAction",v)} placeholder="Describe action taken immediately after incident" rows={2}/>
@@ -1330,6 +1353,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const activeCats = activeMasters("masterCats", VIOLATION_CATEGORIES);
   const activeRCs = activeMasters("masterRCs", ROOT_CAUSE_CATEGORIES);
   const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
+  const caseWarnings = DB.get("warnings",[]).filter(w=>w.caseId===violation.id);
 
   const updateCase = (updates) => {
     const vs = DB.get("violations",[]);
@@ -1358,12 +1382,12 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 
   const changeStatus = (status) => {
     const log = violation.auditLog||[];
-    log.push({action:`Status${status}`,by:user.name,at:Date.now()});
+    log.push({action:`Status changed to ${status}`,by:user.name,at:Date.now()});
     updateCase({status, auditLog:log});
     if(status==="Verification Pending") toast("Case moved to Verification Pending","success");
     if(status==="Closed") {
       toast("Case closed successfully","success");
-      notifyCaseEvent("Closed", violation);
+      notifyCaseEvent("Closed", {...violation, status});
     }
     if(status==="CAPA Pending") toast("Case moved to CAPA Pending","success");
   };
@@ -1516,16 +1540,40 @@ function ViewCasePage({ user, toast, setPage, editId }) {
           </Card>
 
           {/* Generate Warning */}
-          {canEdit && (
+          {(canEdit || caseWarnings.length > 0) && (
             <Card>
               <CardHeader title="Warning Letter"/>
               <div style={{padding:14}}>
-                <div style={{fontSize:12,color:"var(--text2)",marginBottom:10}}>Generate a formal warning letter for this violation.</div>
-                <Btn variant="primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>{
-                  const violations = DB.get("violations",[]);
-                  const v = violations.find(x=>x.id===editId);
-                  if(v) generateWarningPDF(v, user, toast);
-                }}> Generate Warning Letter PDF</Btn>
+                {canEdit && (
+                  <>
+                    <div style={{fontSize:12,color:"var(--text2)",marginBottom:10}}>Generate a formal warning letter for this violation.</div>
+                    <Btn variant="primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>{
+                      const violations = DB.get("violations",[]);
+                      const v = violations.find(x=>x.id===editId);
+                      if(v && issueWarningLetter(v, user, toast)) setViolations([...DB.get("violations",[])]);
+                    }}> Generate & Attach Warning Letter</Btn>
+                  </>
+                )}
+                {caseWarnings.length > 0 && (
+                  <div style={{marginTop:canEdit?12:0,borderTop:canEdit?"1px solid var(--line)":"none",paddingTop:canEdit?10:0}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Attachments</div>
+                    {caseWarnings.map(w=>(
+                      <div key={w.id} style={{display:"flex",alignItems:"center",gap:8,justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid var(--line)"}}>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w.letterType}</div>
+                          <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--mono)"}}>{w.id}  {w.letterDate}</div>
+                        </div>
+                        <Btn size="sm" ghost onClick={()=>{
+                          if (w.attachmentDataUrl) window.open(w.attachmentDataUrl, "_blank");
+                          else {
+                            const v = DB.get("violations",[]).find(x=>x.id===w.caseId);
+                            if(v) generateWarningPDF(v, user, toast, w.letterType);
+                          }
+                        }} icon={<Icon name="eye" size={12}/>}>View</Btn>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </Card>
           )}
@@ -1665,29 +1713,16 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
   const [letterType, setLetterType] = useState("Warning Letter Level-1");
   const [issuer, setIssuer] = useState("HOD + HR Manager");
 
-  const closedCases = DB.get("violations",[]).filter(v=>v.status!=="Draft"&&v.warningIssued!==true||v.status==="CAPA Pending"||v.status==="Under Investigation");
   const allViolations = DB.get("violations",[]);
+  const availableCases = allViolations.filter(v=>v.status!=="Draft" && v.status!=="Rejected");
 
   const generateLetter = () => {
     const violation = allViolations.find(v=>v.id===selectedCase);
     if (!violation) { toast("Please select a case","error"); return; }
-    generateWarningPDF(violation, user, toast, letterType);
-    const newW = {
-      id:"WL-"+Date.now(), caseId:violation.id, empId:violation.empId, empName:violation.empName,
-      empCode:violation.empCode, dept:violation.dept, designation:violation.designation,
-      violationDate:violation.date, letterDate:new Date().toISOString().slice(0,10),
-      letterType, severity:violation.severity, sopViolated:violation.sopViolated,
-      category:violation.category, description:violation.description,
-      disciplinaryAction:DISCIPLINARY_MATRIX[violation.severity]?.[0]||"Formal Warning",
-      corrective:"Strict adherence to all applicable SOPs and company policies.",
-      issuedBy:issuer, status:"Issued", createdAt:Date.now()
-    };
-    const ws = DB.get("warnings",[]);
-    ws.push(newW);
-    DB.set("warnings",ws);
-    setWarnings([...ws]);
+    const newW = issueWarningLetter(violation, user, toast, letterType, issuer);
+    if (!newW) return;
+    setWarnings([...DB.get("warnings",[])]);
     setShowNew(false);
-    toast("Warning letter generated & saved","success");
   };
 
   return (
@@ -1705,7 +1740,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
           <CardHeader title="Generate Warning Letter"/>
           <div style={{padding:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
             <FormGroup label="Case Reference" required>
-              <Select value={selectedCase} onChange={setSelectedCase} options={allViolations.filter(v=>v.status!=="Draft").map(v=>({value:v.id,label:`${v.id}  ${v.empName} (${v.severity})`}))} placeholder="Select case"/>
+              <Select value={selectedCase} onChange={setSelectedCase} options={availableCases.map(v=>({value:v.id,label:`${v.id}  ${v.empName} (${v.severity})`}))} placeholder="Select case"/>
             </FormGroup>
             <FormGroup label="Letter Type">
               <Select value={letterType} onChange={setLetterType} options={["Warning Letter Level-1","Warning Letter Level-2","Final Warning Letter","Show-Cause Notice","Increment Hold Notice"]}/>
@@ -1745,10 +1780,19 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
                   <td style={{padding:"9px 12px"}}><Badge severity={w.severity}/></td>
                   <td style={{padding:"9px 12px"}}><span style={{fontSize:11,background:"var(--green-bg)",color:"var(--green)",padding:"2px 8px",borderRadius:10,fontWeight:500}}> {w.status}</span></td>
                   <td style={{padding:"9px 12px"}}>
-                    <Btn size="sm" variant="primary" onClick={()=>{
-                      const v = allViolations.find(x=>x.id===w.caseId);
-                      if(v) generateWarningPDF(v, user, toast, w.letterType);
-                    }}> PDF</Btn>
+                    <div style={{display:"flex",gap:6,flexWrap:"nowrap"}}>
+                      <Btn size="sm" variant="primary" onClick={()=>{
+                        if (w.attachmentDataUrl) window.open(w.attachmentDataUrl, "_blank");
+                        else {
+                          const v = allViolations.find(x=>x.id===w.caseId);
+                          if(v) generateWarningPDF(v, user, toast, w.letterType);
+                        }
+                      }} icon={<Icon name="eye" size={12} color="#fff"/>}>View</Btn>
+                      <Btn size="sm" onClick={()=>{
+                        const v = allViolations.find(x=>x.id===w.caseId);
+                        if(v) generateWarningPDF(v, user, toast, w.letterType);
+                      }} icon={<Icon name="download" size={12}/>}>PDF</Btn>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2328,13 +2372,17 @@ function UsersPage({ user, toast }) {
     setSaving(true);
     setTimeout(()=>{
       const arr = DB.get("users",[]);
+      const normalizedEmail = form.email.trim().toLowerCase();
+      const cleanForm = { ...form, name:form.name.trim(), email:normalizedEmail };
+      const duplicate = arr.some(x => (x.email || "").toLowerCase() === normalizedEmail && (!editUser || x.id !== editUser.id));
+      if (duplicate) { toast("Email already exists","error"); setSaving(false); return; }
       if (editUser) {
         const idx = arr.findIndex(x=>x.id===editUser.id);
-        if (idx>=0) arr[idx] = {...arr[idx],...form};
+        if (idx<0) { toast("User record not found","error"); setSaving(false); return; }
+        arr[idx] = {...arr[idx],...cleanForm, updatedAt:Date.now()};
         toast(`User ${form.name} updated`,"success");
       } else {
-        if (arr.some(x=>x.email.toLowerCase()===form.email.toLowerCase())) { toast("Email already exists","error"); setSaving(false); return; }
-        arr.push({id:"u"+Date.now(),...form,complianceScore:100,violations:0});
+        arr.push({id:"u"+Date.now(),...cleanForm,complianceScore:100,violations:0,createdAt:Date.now()});
         toast(`User ${form.name} created`,"success");
       }
       DB.set("users",arr); setUsers([...arr]);
@@ -2540,7 +2588,7 @@ function UsersPage({ user, toast }) {
                           <Btn size="sm" onClick={()=>openEdit(u)} icon={<Icon name="edit" size={12}/>}>Edit</Btn>
                           <Btn size="sm" ghost onClick={()=>toggleActive(u.id)}>{u.active!==false?"Disable":"Enable"}</Btn>
                           {u.id!=="u1" && <Btn size="sm" ghost onClick={()=>toast(`Reset link sent to ${u.email}`,"success")} icon={<Icon name="lock" size={12}/>}>Pwd</Btn>}
-                          {u.id!=="u1" && <Btn size="sm" variant="danger" onClick={()=>{setDelUser(u.id);setShowForm(false);}}></Btn>}
+                          {u.id!=="u1" && <Btn size="sm" variant="danger" onClick={()=>{setDelUser(u.id);setShowForm(false);}} icon={<Icon name="trash" size={12} color="#fff"/>}>Delete</Btn>}
                         </div>
                       )}
                     </td>
@@ -2661,7 +2709,7 @@ function UsersPage({ user, toast }) {
 // ============================================================
 // PDF GENERATORS
 // ============================================================
-function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Letter Level-1") {
+function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Letter Level-1", options={}) {
   const { jsPDF } = window.jspdf;
   if (!jsPDF) { toast("PDF library not loaded","error"); return; }
   const doc = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
@@ -2671,12 +2719,15 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   doc.setFillColor(13,27,42);
   doc.rect(0,0,W,30,"F");
   // Add logo image (white version)
-  try { doc.addImage(LOGO_B64,"JPEG",ml,4,60,16); } catch(e) {
+  try { doc.addImage(LOGO_B64, LOGO_B64.startsWith("data:image/png") ? "PNG" : "JPEG", ml,4,48,14); } catch(e) {
     // fallback to text if image fails
     doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
     doc.text(COMPANY_NAME.toUpperCase(),W/2,12,{align:"center"});
   }
   doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(11);
+  doc.text(COMPANY_NAME, W/2, 11, {align:"center"});
   doc.setFont("helvetica","normal");
   doc.setFontSize(7.5);
   doc.text(ISO_CERTS, W/2, 22, {align:"center"});
@@ -2806,15 +2857,62 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   doc.text(`${COMPANY_NAME} | PVMS v${APP_VERSION} | Generated: ${new Date().toLocaleString("en-IN")} | ${refNo}`, W/2, 293, {align:"center"});
 
   const filename = `WarningLetter_${violation.empName?.replace(/\s+/g,"_")}_${violation.id}.pdf`;
-  doc.save(filename);
-  if(toast) toast("Warning letter PDF downloaded","success");
+  const dataUrl = doc.output("datauristring");
+  if (options.download !== false) doc.save(filename);
+  if(toast && options.toast !== false) toast("Warning letter PDF downloaded","success");
+  return { filename, dataUrl };
+}
+
+function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Letter Level-1", issuer="HOD + HR Manager", options={}) {
+  const attachment = generateWarningPDF(violation, issuedBy, toast, letterType, { download: options.download !== false, toast:false });
+  if (!attachment) return null;
+  const warnings = DB.get("warnings", []);
+  const newW = {
+    id:"WL-"+Date.now(),
+    caseId:violation.id,
+    empId:violation.empId,
+    empName:violation.empName,
+    empCode:violation.empCode,
+    dept:violation.dept,
+    designation:violation.designation,
+    violationDate:violation.date,
+    letterDate:new Date().toISOString().slice(0,10),
+    letterType,
+    severity:violation.severity,
+    sopViolated:violation.sopViolated,
+    category:violation.category,
+    description:violation.description,
+    disciplinaryAction:DISCIPLINARY_MATRIX[violation.severity]?.[0]||"Formal Warning",
+    corrective:"Strict adherence to all applicable SOPs and company policies.",
+    issuedBy:issuer,
+    status:"Issued",
+    attachmentName:attachment.filename,
+    attachmentDataUrl:attachment.dataUrl,
+    createdAt:Date.now()
+  };
+  warnings.push(newW);
+  DB.set("warnings", warnings);
+
+  const violations = DB.get("violations", []);
+  const idx = violations.findIndex(v => v.id === violation.id);
+  if (idx >= 0) {
+    violations[idx] = {
+      ...violations[idx],
+      warningIssued:true,
+      warningLetterId:newW.id,
+      auditLog:[...(violations[idx].auditLog || []), { action:`Warning letter issued (${letterType})`, by:issuedBy?.name || "System", at:Date.now() }]
+    };
+    DB.set("violations", violations);
+  }
+  if (toast) toast("Warning letter generated, saved, and attached","success");
+  return newW;
 }
 
 function exportDashboardPDF(violations, users) {
   const { jsPDF } = window.jspdf;
   if (!jsPDF) return;
   const doc = new jsPDF();
-  const W=210, ml=15;
+  const W=210, ml=14, mr=196;
 
   doc.setFillColor(13,27,42);
   doc.rect(0,0,W,26,"F");
@@ -2823,59 +2921,79 @@ function exportDashboardPDF(violations, users) {
     doc.text(COMPANY_NAME, ml, 11);
   }
   doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(12);
+  doc.text(COMPANY_NAME, W/2, 10, {align:"center"});
   doc.setFont("helvetica","normal");
-  doc.setFontSize(7.5);
-  doc.text("Process Violation Management System  Dashboard Report", W/2, 18, {align:"center"});
+  doc.setFontSize(8);
+  doc.text("Process Violation Management System - Dashboard Report", W/2, 18, {align:"center"});
   doc.setFontSize(7);
-  doc.text(`${ISO_CERTS} | ${new Date().toLocaleDateString("en-IN",{dateStyle:"long"})}`, W/2, 24, {align:"center"});
+  doc.text(`${ISO_CERTS} | Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"})}`, W/2, 24, {align:"center"});
 
-  let y = 30;
+  let y = 34;
   const kpis = [
     ["Total Violations", violations.length],
     ["Open Cases", violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length],
     ["Closed Cases", violations.filter(v=>v.status==="Closed").length],
+    ["Overdue CAPA", violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length],
     ["Critical (Active)", violations.filter(v=>v.severity==="Critical"&&v.status!=="Closed").length],
     ["CAPA Pending", violations.filter(v=>v.status==="CAPA Pending").length],
     ["Repeat Violations", violations.filter(v=>v.repeatViolation).length],
   ];
-  doc.setFont("helvetica","bold");
-  doc.setFontSize(11);
-  doc.setTextColor(13,27,42);
-  doc.text("Key Performance Indicators", ml, y); y+=8;
-  kpis.forEach(([k,v])=>{
-    doc.setFont("helvetica","normal");
-    doc.setFontSize(9);
-    doc.setTextColor(50,50,50);
-    doc.text(`${k}: ${v}`, ml+4, y); y+=6;
+  doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(13,27,42);
+  doc.text("Key Performance Indicators", ml, y); y+=6;
+  const cardW = 42, cardH = 18;
+  kpis.forEach(([k,v], i)=>{
+    const x = ml + (i % 4) * 46;
+    const cy = y + Math.floor(i / 4) * 22;
+    doc.setDrawColor(210,220,235); doc.setFillColor(244,247,251);
+    doc.roundedRect(x, cy, cardW, cardH, 2, 2, "FD");
+    doc.setFont("helvetica","normal"); doc.setFontSize(6.8); doc.setTextColor(90,100,115);
+    doc.text(k, x+3, cy+6);
+    doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(13,27,42);
+    doc.text(String(v), x+3, cy+14);
   });
-  y+=4;
-  doc.setFont("helvetica","bold");
-  doc.setFontSize(11);
-  doc.setTextColor(13,27,42);
-  doc.text("Violation Register", ml, y); y+=8;
-  const headers = ["Case ID","Date","Employee","Severity","Status"];
-  const colW = [38,22,42,22,34];
-  headers.forEach((h,i)=>{
-    doc.setFont("helvetica","bold");
-    doc.setFontSize(8);
-    doc.setTextColor(80,80,80);
-    doc.text(h, ml+colW.slice(0,i).reduce((a,b)=>a+b,0), y);
-  });
-  y+=5;
-  doc.setLineWidth(.2);
-  doc.setDrawColor(200,200,200);
-  doc.line(ml,y,195,y); y+=3;
-  violations.slice(-15).reverse().forEach(v=>{
-    const row=[v.id,v.date,v.empName?.slice(0,18)||"",v.severity,v.status];
-    row.forEach((cell,i)=>{
-      doc.setFont("helvetica","normal");
-      doc.setFontSize(8);
-      doc.setTextColor(40,40,40);
-      doc.text(String(cell), ml+colW.slice(0,i).reduce((a,b)=>a+b,0), y);
+  y += Math.ceil(kpis.length / 4) * 22 + 4;
+
+  const drawSection = (title, headers, rows, widths) => {
+    if (y > 250) { doc.addPage(); y = 18; }
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(13,27,42);
+    doc.text(title, ml, y); y += 6;
+    doc.setFillColor(235,241,249); doc.rect(ml, y, mr-ml, 7, "F");
+    let x = ml + 2;
+    headers.forEach((h,i)=>{ doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(70,80,95); doc.text(h, x, y+5); x += widths[i]; });
+    y += 8;
+    rows.forEach((row, idx)=>{
+      if (y > 280) { doc.addPage(); y = 18; }
+      if (idx % 2 === 0) { doc.setFillColor(249,251,253); doc.rect(ml, y-1, mr-ml, 7, "F"); }
+      let cx = ml + 2;
+      row.forEach((cell,i)=>{
+        const text = doc.splitTextToSize(String(cell ?? ""), widths[i]-2)[0] || "";
+        doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(45,55,70);
+        doc.text(text, cx, y+4);
+        cx += widths[i];
+      });
+      y += 7;
     });
-    y+=6;
-    if(y>275){doc.addPage();y=20;}
+    y += 5;
+  };
+
+  const deptRows = DEPARTMENTS.map(d=>{
+    const vs = violations.filter(v=>v.dept===d);
+    return [d, vs.length, vs.filter(v=>!["Closed","Rejected"].includes(v.status)).length, vs.filter(v=>v.status==="Closed").length];
   });
+  drawSection("Department Summary", ["Department","Total","Open","Closed"], deptRows, [92,28,28,28]);
+
+  const sevRows = ["Minor","Moderate","Major","Critical"].map(s=>[s, violations.filter(v=>v.severity===s).length]);
+  drawSection("Severity Summary", ["Severity","Count"], sevRows, [92,28]);
+
+  const recentRows = violations.slice(-15).reverse().map(v=>[v.id, v.date, v.empName || "", v.severity, v.status]);
+  drawSection("Recent Violation Register", ["Case ID","Date","Employee","Severity","Status"], recentRows, [36,24,56,28,34]);
+
+  doc.setFont("helvetica","normal");
+  doc.setFontSize(7);
+  doc.setTextColor(110,120,130);
+  doc.text(`${COMPANY_NAME} | PVMS v${APP_VERSION}`, W/2, 290, {align:"center"});
   doc.save(`PVMS_Dashboard_${new Date().toISOString().slice(0,10)}.pdf`);
 }
 
