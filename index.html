@@ -315,6 +315,15 @@ function activeMasterOptions(key, fallback) {
     .map(item => item.name);
 }
 
+function isCaseEmployeeUser(user) {
+  return user && user.active !== false && user.id !== "u1" && user.name;
+}
+
+function employeeOptionLabel(user) {
+  const detail = user.empCode || user.email || user.dept || user.role;
+  return detail ? `${user.name} (${detail})` : user.name;
+}
+
 // ============================================================
 // SEED DATA
 // ============================================================
@@ -1119,8 +1128,10 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const activeDepts = activeMasters("masterDepts", DEPARTMENTS);
   const activeCats = activeMasters("masterCats", VIOLATION_CATEGORIES);
   const activeRCs = activeMasters("masterRCs", ROOT_CAUSE_CATEGORIES);
-  const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
-  const employees = users.filter(u=>u.role==="User/Employee"||u.role==="Process Dept Rep");
+  const hods = users.filter(u=>(u.role==="HOD"||u.role==="Master Admin") && u.active !== false);
+  const employees = users
+    .filter(isCaseEmployeeUser)
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
 
   const set = (k, v) => setForm(f=>({...f,[k]:v}));
 
@@ -1137,6 +1148,16 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   };
 
   const selectEmployee = (empId) => {
+    if (empId === "other") {
+      setRepeatAlert(null);
+      setForm(f=>({...f, empId:"other", empName:"", empCode:"", designation:"", repeatViolation:false}));
+      return;
+    }
+    if (!empId) {
+      setRepeatAlert(null);
+      setForm(f=>({...f, empId:"", empName:"", empCode:"", designation:""}));
+      return;
+    }
     const emp = users.find(u=>u.id===empId);
     if (emp) {
       set("empId", emp.id); set("empName", emp.name); set("empCode", emp.empCode);
@@ -1176,9 +1197,9 @@ function CaseFormPage({ user, toast, setPage, editId }) {
         DB.set("violations", violations);
         toast(`Case ${editId} updated`, "success");
       } else {
-        DB.nextSeq("VMS");
-        const id = DB.genId("VMS");
-        const newCase = { id, caseNo:DB.get("seq_VMS",1), ...cleanForm, evidence,
+        const caseNo = DB.nextSeq("VMS");
+        const id = `VMS-${new Date().getFullYear()}-${String(caseNo).padStart(4,"0")}`;
+        const newCase = { id, caseNo, ...cleanForm, evidence,
           status: isDraft ? "Draft" : "Submitted",
           createdBy: user.id, createdAt: Date.now(),
           capaActions:[], fiveWhy:[], auditLog:[{action:"Case Created",by:user.name,at:Date.now()}]
@@ -1231,7 +1252,10 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                 <Select value={form.dept} onChange={v=>set("dept",v)} options={activeDepts} placeholder="Select department"/>
               </FormGroup>
               <FormGroup label="Employee Name" required error={errors.empName}>
-                <Select value={form.empId||""} onChange={selectEmployee} options={[...employees.map(e=>({value:e.id,label:`${e.name} (${e.empCode})`})),{value:"other",label:"Other / External"}]} placeholder="Search employee"/>
+                <Select value={form.empId||""} onChange={selectEmployee} options={[...employees.map(e=>({value:e.id,label:employeeOptionLabel(e)})),{value:"other",label:"Other / External"}]} placeholder="Search employee"/>
+                {form.empId === "other" && (
+                  <Input value={form.empName} onChange={v=>set("empName",v)} placeholder="Enter external employee name" style={{marginTop:8}}/>
+                )}
               </FormGroup>
               <FormGroup label="Employee Code">
                 <Input value={form.empCode} onChange={v=>set("empCode",v)} placeholder="Auto-filled on selection"/>
