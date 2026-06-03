@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "vercel dev",
-    "start": "vercel dev"
+    "start": "vercel dev",
+    "build": "echo 'No build step required'"
   },
   "dependencies": {
     "cloudinary": "^2.10.0",
