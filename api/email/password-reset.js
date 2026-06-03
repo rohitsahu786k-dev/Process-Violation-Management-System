@@ -13,7 +13,7 @@ function normalizeEmail(email) {
 }
 
 function defaultPasswordFor(user) {
-  if (user.role === "Master Admin" && normalizeEmail(user.email) === "admin@pws.com") return "admin123";
+  if (user.role === "Master Admin") return "admin123";
   return "password123";
 }
 

@@ -485,7 +485,7 @@ function employeeOptionLabel(user) {
 function seedIfEmpty() {
   if (DB.get("seeded") === true) return;
   const users = [
-    { id:"u1", empCode:"SYS-001", name:"Master Admin", email:"admin@pws.com", role:"Master Admin", dept:"System", designation:"System Administrator", active:true, complianceScore:100, violations:0 }
+    { id:"u1", empCode:"SYS-001", name:"Master Admin", email:"jatin.chouhan@onepws.com", role:"Master Admin", dept:"System", designation:"System Administrator", active:true, complianceScore:100, violations:0 }
   ];
   const now = Date.now();
   const violations = [];
@@ -736,8 +736,8 @@ function LoginPage({ onLogin }) {
 
       if (!user) { setError("User account not found in database."); setLoading(false); return; }
 
-      const expectedPwd = user.role === "Master Admin" && user.email === "admin@pws.com" ? "admin123" : "password123";
-      if (password !== expectedPwd && password !== "admin123") { setError("Invalid password."); setLoading(false); return; }
+      const expectedPwd = user.role === "Master Admin" ? "admin123" : "password123";
+      if (password !== expectedPwd) { setError("Invalid password."); setLoading(false); return; }
 
       const logs = DB.get("auditLogs", []);
       logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"LOGIN", entity:"-", detail:"Successful login", ip:"192.168.1."+Math.floor(Math.random()*50+10) });
