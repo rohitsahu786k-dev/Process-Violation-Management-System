@@ -210,34 +210,90 @@ function uniqueEmails(values) {
     .filter(Boolean))];
 }
 
+function activeRegisteredUsers(users) {
+  return (users || [])
+    .filter(u => u && u.active !== false && u.name)
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+}
+
+function registeredUserOptionLabel(user) {
+  const detail = [user.empCode, user.role, user.dept].filter(Boolean).join(" - ");
+  return detail ? `${user.name} (${detail})` : user.name;
+}
+
+function findCaseEmployee(violation, users) {
+  return (users || []).find(u => u.id === violation.empId)
+    || (users || []).find(u => (u.email || "").toLowerCase() === (violation.email || "").toLowerCase())
+    || (users || []).find(u => u.name === violation.empName);
+}
+
+function findCaseHod(violation, employee, users) {
+  const hodEmail = String(employee?.hodBuhEmail || "").toLowerCase();
+  return (users || []).find(u => u.name === violation.assignedHOD)
+    || (users || []).find(u => u.role === "HOD" && u.dept === violation.dept && u.active !== false)
+    || (users || []).find(u => (u.email || "").toLowerCase() === hodEmail && u.active !== false);
+}
+
+function formatEmailDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
+}
+
 async function notifyCaseEvent(eventType, violation) {
   try {
     const users = DB.get("users", []);
-    const emp = users.find(u => u.name === violation.empName || u.id === violation.empId);
-    const hod = users.find(u =>
-      u.name === violation.assignedHOD ||
-      (u.role === "HOD" && u.dept === violation.dept) ||
-      uniqueEmails([u.email]).includes(String(emp?.hodBuhEmail || "").toLowerCase())
-    );
-    const to = uniqueEmails([emp?.email, violation.email]);
+    const emp = findCaseEmployee(violation, users);
+    const hod = findCaseHod(violation, emp, users);
+    const managementEmails = users
+      .filter(u => u.active !== false && u.role === "Management")
+      .map(u => u.email);
+    const departmentHods = users
+      .filter(u => u.active !== false && u.role === "HOD" && u.dept === violation.dept)
+      .map(u => u.email);
+    const assignedInvestigator = users.find(u => u.name === violation.assignedInvestigator || u.id === violation.assignedInvestigator);
+    const primary = uniqueEmails([emp?.email, violation.email]);
+    const fallbackPrimary = uniqueEmails([hod?.email, emp?.hodBuhEmail, ...managementEmails]).slice(0, 1);
+    const to = primary.length ? primary : fallbackPrimary;
     if (!to.length) return;
     const cc = uniqueEmails([
+      ...departmentHods,
       emp?.reportingToEmail,
       emp?.hodBuhEmail,
       emp?.managementEmail,
       hod?.email,
-      ...users.filter(u => u.role === "Management").map(u => u.email),
+      assignedInvestigator?.email,
+      ...managementEmails,
     ]).filter(email => !to.includes(email));
 
-    const template = {
-      subject: eventType === "Registered" ? `New Case Registered: ${violation.id}` : `Case Closed: ${violation.id}`,
-      body: `Dear ${emp?.name || violation.empName || "Employee"},\n\nYour case has been ${eventType}.\n\nCase ID: ${violation.id}\nCategory: ${violation.category}\nSeverity: ${violation.severity}\nStatus: ${eventType === "Closed" ? "Closed" : (violation.status || "Submitted")}\n\nPlease check the portal for more details.\n\nRegards,\nPVMS Automation System`
+    const isClosed = eventType === "Closed";
+    const template = getEmailTemplateById(isClosed ? "caseClosed" : "caseRegistered") || {
+      subject: isClosed ? "PVMS Case Closed: {{violationId}}" : "New PVMS Case Registered: {{violationId}}",
+      body: "Dear {{employeeName}},\n\nPVMS case {{violationId}} has been updated.\n\nRegards,\nPVMS Automation System"
+    };
+    const variables = {
+      userName: emp?.name || violation.empName || "PVMS User",
+      employeeName: emp?.name || violation.empName || "Employee",
+      violationId: violation.id || "",
+      caseId: violation.id || "",
+      department: violation.dept || "",
+      category: violation.category || "",
+      severity: violation.severity || "",
+      priority: violation.severity || "",
+      status: isClosed ? "Closed" : (violation.status || "Submitted"),
+      incidentDate: formatEmailDate(violation.date),
+      dueDate: formatEmailDate(violation.dueDate),
+      closureDate: formatEmailDate(new Date()),
+      assignedHOD: hod?.name || violation.assignedHOD || "Department HOD",
+      assignedInvestigator: assignedInvestigator?.name || violation.assignedInvestigator || "",
+      portalUrl: typeof window !== "undefined" ? window.location.origin : ""
     };
 
     await fetch("/api/email/notification", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: to.join(","), cc: cc.join(","), template })
+      body: JSON.stringify({ to: to.join(","), cc: cc.join(","), template, variables })
     });
   } catch (err) { console.error("notifyCaseEvent failed", err); }
 }
@@ -282,6 +338,58 @@ const DISCIPLINARY_MATRIX = {
   Major:    ["Written Warning L-2 + Suspension","Final Warning + Increment Hold","Termination Review","Immediate Termination"],
   Critical: ["Final Warning + Immediate Suspension","Termination Review","Termination Recommendation","Termination"],
 };
+
+const DEFAULT_EMAIL_TEMPLATES = [
+  {
+    id:"caseRegistered",
+    name:"New Case Registered",
+    subject:"New PVMS Case Registered: {{violationId}}",
+    body:"Dear {{employeeName}},\n\nA new PVMS case has been registered and routed for review.\n\nCase ID: {{violationId}}\nDepartment: {{department}}\nCategory: {{category}}\nSeverity: {{severity}}\nIncident Date: {{incidentDate}}\nAssigned HOD: {{assignedHOD}}\nStatus: {{status}}\n\nThe assigned HOD and management team have also been notified for visibility and required action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"caseClosed",
+    name:"Case Closure Notice",
+    subject:"PVMS Case Closed: {{violationId}}",
+    body:"Dear {{employeeName}},\n\nThe PVMS case listed below has been closed after review and completion of required actions.\n\nCase ID: {{violationId}}\nDepartment: {{department}}\nCategory: {{category}}\nSeverity: {{severity}}\nClosure Date: {{closureDate}}\nFinal Status: {{status}}\n\nThe HOD and management team have been copied for record and compliance tracking.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"due",
+    name:"Due Date Reminder",
+    subject:"PVMS Reminder: {{violationId}} is due on {{dueDate}}",
+    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS action assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nDue Date: {{dueDate}}\nCurrent Status: {{status}}\n\nPlease complete the required action before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"escalation",
+    name:"Escalation Reminder",
+    subject:"PVMS Escalation: {{violationId}} is overdue",
+    body:"Dear Manager,\n\nThe following PVMS case has crossed its due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nDue Date: {{dueDate}}\nPending Since: {{pendingDays}} days\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"summary",
+    name:"Monthly Summary",
+    subject:"PVMS Monthly Summary - {{summaryMonth}}",
+    body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Cases: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  }
+];
+
+function getEmailTemplates() {
+  const saved = DB.get("emailTemplates", []);
+  const savedList = Array.isArray(saved) ? saved : [];
+  const savedById = new Map(savedList.filter(t => t && t.id).map(t => [t.id, t]));
+  const mergedDefaults = DEFAULT_EMAIL_TEMPLATES.map(t => ({ ...t, ...(savedById.get(t.id) || {}) }));
+  const custom = savedList.filter(t => t && t.id && !DEFAULT_EMAIL_TEMPLATES.some(d => d.id === t.id));
+  return [...mergedDefaults, ...custom];
+}
+
+function getEmailTemplateById(id) {
+  return getEmailTemplates().find(t => t.id === id);
+}
+
+const EMAIL_TEMPLATE_VARIABLES = [
+  "employeeName","userName","violationId","department","category","severity","status",
+  "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
+  "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount"
+];
 
 // ============================================================
 // STORAGE LAYER (localStorage  swap for Firebase)
@@ -1431,7 +1539,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   if (!violation) return <EmptyState icon="folder" title="Case not found" sub="This case may have been removed"/>;
 
   const [fiveWhy, setFiveWhy] = useState(violation.fiveWhy?.length ? violation.fiveWhy : ["","","","",""]);
-  const [newCapa, setNewCapa] = useState({type:"Corrective",description:"",owner:"",dueDate:"",status:"Open"});
+  const [newCapa, setNewCapa] = useState({type:"Corrective",description:"",ownerId:"",owner:"",ownerEmail:"",dueDate:"",status:"Open"});
   const [showCapaForm, setShowCapaForm] = useState(false);
   const [investigatorRemarks, setInvestigatorRemarks] = useState(violation.investigatorRemarks||"");
 
@@ -1442,6 +1550,8 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const activeCats = activeMasters("masterCats", VIOLATION_CATEGORIES);
   const activeRCs = activeMasters("masterRCs", ROOT_CAUSE_CATEGORIES);
   const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
+  const registeredUsers = activeRegisteredUsers(users);
+  const registeredUserOptions = registeredUsers.map(u => ({ value:u.id, label:registeredUserOptionLabel(u) }));
   const caseWarnings = DB.get("warnings",[]).filter(w=>w.caseId===violation.id);
 
   const updateCase = (updates) => {
@@ -1464,7 +1574,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     const action = {...newCapa, id:"ca"+Date.now()};
     const updated = [...(violation.capaActions||[]), action];
     updateCase({capaActions:updated});
-    setNewCapa({type:"Corrective",description:"",owner:"",dueDate:"",status:"Open"});
+    setNewCapa({type:"Corrective",description:"",ownerId:"",owner:"",ownerEmail:"",dueDate:"",status:"Open"});
     setShowCapaForm(false);
     toast("CAPA action added","success");
   };
@@ -1479,6 +1589,21 @@ function ViewCasePage({ user, toast, setPage, editId }) {
       notifyCaseEvent("Closed", {...violation, status});
     }
     if(status==="CAPA Pending") toast("Case moved to CAPA Pending","success");
+  };
+
+  const selectCapaOwner = (ownerId) => {
+    const owner = registeredUsers.find(u => u.id === ownerId);
+    setNewCapa(f => ({
+      ...f,
+      ownerId,
+      owner: owner?.name || "",
+      ownerEmail: owner?.email || ""
+    }));
+  };
+
+  const formatCapaOwner = (ca) => {
+    const owner = users.find(u => u.id === ca.ownerId) || users.find(u => u.name === ca.owner);
+    return owner ? registeredUserOptionLabel(owner) : (ca.owner || "Unassigned");
   };
 
   const sev = SEVERITY_CONFIG[violation.severity]||{};
@@ -1559,7 +1684,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               <div style={{padding:14,borderBottom:"1px solid var(--line)",background:"var(--bg)"}}>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                   <FormGroup label="Type"><Select value={newCapa.type} onChange={v=>setNewCapa(f=>({...f,type:v}))} options={["Corrective","Preventive","System","HR Action"]} placeholder="Select type"/></FormGroup>
-                  <FormGroup label="Owner"><Select value={newCapa.owner} onChange={v=>setNewCapa(f=>({...f,owner:v}))} options={hods.map(h=>h.name)} placeholder="Assign to"/></FormGroup>
+                  <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
                   <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
                   <FormGroup label="Due Date"><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
                   <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={CAPA_STATUSES}/></FormGroup>
@@ -1581,7 +1706,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                         <span style={{fontSize:11,color:ca.status==="Completed"||ca.status==="Verified"?"var(--green)":ca.status==="Overdue"?"var(--red)":"var(--amber)",fontWeight:500}}>{ca.status}</span>
                       </div>
                       <div style={{fontSize:13,color:"var(--text)",marginBottom:4}}>{ca.description}</div>
-                      <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {ca.owner||"Unassigned"}  Due: {ca.dueDate||""}</div>
+                      <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatCapaOwner(ca)}  Due: {ca.dueDate||""}</div>
                     </div>
                     {canEdit && (
                       <Select value={ca.status} onChange={v=>{const updated=[...violation.capaActions];updated[i]={...updated[i],status:v};updateCase({capaActions:updated});}} options={CAPA_STATUSES} style={{width:130}}/>
@@ -2308,47 +2433,73 @@ function AuditTrailPage({ user }) {
 }
 
 // ============================================================
-// USER MANAGEMENT PAGE
+// EMAIL INTEGRATION PAGE
 // ============================================================
 function EmailIntegrationPage({ user, toast }) {
-  const defaultTemplates = [
-    {
-      id:"due",
-      name:"Due Date Reminder",
-      subject:"PVMS Reminder: {{violationId}} is due on {{dueDate}}",
-      body:"Dear {{userName}},\n\nThis is an automated reminder for the pending violation assigned to you.\n\nViolation ID: {{violationId}}\nPriority: {{priority}}\nDue Date: {{dueDate}}\nStatus: {{status}}\n\nPlease take the required action before the deadline.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
-    },
-    {
-      id:"escalation",
-      name:"Escalation Reminder",
-      subject:"PVMS Escalation: {{violationId}} is overdue",
-      body:"Dear Manager,\n\nThe following violation has crossed its due date and remains unresolved.\n\nViolation ID: {{violationId}}\nAssigned User: {{assignedUser}}\nDue Date: {{dueDate}}\nPending Since: {{pendingDays}} days\n\nPlease review and take necessary action.\n\nRegards,\nPVMS Automation Engine"
-    },
-    {
-      id:"summary",
-      name:"Monthly Summary",
-      subject:"PVMS Monthly Summary - {{summaryMonth}}",
-      body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Violations: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
-    }
-  ];
-  const [templates, setTemplates] = useState(()=>DB.get("emailTemplates") || defaultTemplates);
-  const [selected, setSelected] = useState(templates[0]?.id || "due");
+  const [templates, setTemplates] = useState(()=>getEmailTemplates());
+  const [selected, setSelected] = useState(templates[0]?.id || "caseRegistered");
   const [testEmail, setTestEmail] = useState("");
   const [sending, setSending] = useState(false);
 
+  useEffect(() => {
+    const merged = getEmailTemplates();
+    setTemplates(merged);
+    if (JSON.stringify(DB.get("emailTemplates", [])) !== JSON.stringify(merged)) {
+      DB.set("emailTemplates", merged);
+    }
+  }, []);
+
   if (user.role !== "Master Admin") return <EmptyState icon="lock" title="Access Restricted" sub="Master Admin only"/>;
 
-  const current = templates.find(t => t.id === selected) || templates[0];
+  const sampleVars = {
+    employeeName:"Amit Sharma",
+    userName:"Amit Sharma",
+    violationId:"VMS-2026-0007",
+    department:"PWS Floor",
+    category:"Process Non-Adherence",
+    severity:"Major",
+    priority:"Major",
+    status:"Submitted",
+    incidentDate:"03 Jun 2026",
+    dueDate:"07 Jun 2026",
+    closureDate:"10 Jun 2026",
+    assignedHOD:"Mr. Ankit Chittora",
+    assignedInvestigator:"Mr. Mukesh Menaria",
+    assignedUser:"Amit Sharma",
+    pendingDays:"2",
+    summaryMonth:"June 2026",
+    openCount:"12",
+    pendingCount:"4",
+    overdueCount:"1",
+    closedCount:"18"
+  };
+
+  const current = templates.find(t => t.id === selected) || templates[0] || DEFAULT_EMAIL_TEMPLATES[0];
+  const interpolate = (value) => String(value || "").replace(/{{\s*([\w]+)\s*}}/g, (_, key) => sampleVars[key] ?? "");
+  const escapePreview = (value) => String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  const bodyPreviewHtml = interpolate(current.body)
+    .split(/\n{2,}/)
+    .map(block => `<p style="margin:0 0 12px;line-height:1.65;color:#374151">${escapePreview(block).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+
   const updateTemplate = (key, value) => {
     const next = templates.map(t => t.id === current.id ? { ...t, [key]: value } : t);
     setTemplates(next);
     DB.set("emailTemplates", next);
   };
   const resetTemplates = () => {
-    setTemplates(defaultTemplates);
-    setSelected("due");
-    DB.set("emailTemplates", defaultTemplates);
+    setTemplates(DEFAULT_EMAIL_TEMPLATES);
+    setSelected("caseRegistered");
+    DB.set("emailTemplates", DEFAULT_EMAIL_TEMPLATES);
     toast("Email templates reset", "success");
+  };
+  const insertVariable = (name) => {
+    const suffix = current.body && !current.body.endsWith("\n") ? "\n" : "";
+    updateTemplate("body", `${current.body || ""}${suffix}{{${name}}}`);
   };
   const sendTest = async () => {
     if (!testEmail) { toast("Enter a test email address", "error"); return; }
@@ -2368,41 +2519,97 @@ function EmailIntegrationPage({ user, toast }) {
     }
   };
 
+  const automationRules = [
+    { event:"New case registered", template:"New Case Registered", to:"Employee", cc:"HOD, Management" },
+    { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
+    { event:"Due reminder", template:"Due Date Reminder", to:"Owner", cc:"Escalation chain" },
+    { event:"Overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
+  ];
+
   return (
     <div>
-      <PageHeader title="Email Integration" sub="Reminder templates, SMTP test, and automation readiness"
+      <PageHeader title="Email Integration" sub="Event templates, SMTP test, and automation readiness"
         actions={<Btn size="sm" onClick={resetTemplates}>Reset Templates</Btn>}
       />
-      <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"280px minmax(0,1fr)",gap:16}}>
         <Card>
-          <CardHeader title="Templates"/>
+          <CardHeader title="Templates" subtitle={`${templates.length} active templates`}/>
           <div style={{padding:10,display:"flex",flexDirection:"column",gap:6}}>
             {templates.map(t => (
               <button key={t.id} onClick={()=>setSelected(t.id)}
-                style={{textAlign:"left",padding:"9px 10px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:selected===t.id?"var(--blue-l)":"var(--bg3)",color:selected===t.id?"var(--blue)":"var(--text2)",fontWeight:selected===t.id?600:500}}
-              >{t.name}</button>
+                style={{textAlign:"left",padding:"10px 11px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:selected===t.id?"var(--blue-l)":"var(--bg3)",color:selected===t.id?"var(--blue)":"var(--text2)",fontWeight:selected===t.id?600:500,display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}
+              >
+                <span>{t.name}</span>
+                {["caseRegistered","caseClosed"].includes(t.id) && <span style={{fontSize:10,textTransform:"uppercase",letterSpacing:".04em",color:selected===t.id?"var(--blue)":"var(--green)"}}>Auto</span>}
+              </button>
             ))}
           </div>
         </Card>
-        <div>
-          <Card style={{marginBottom:16}}>
-            <CardHeader title={current.name} subtitle="Use variables such as {{userName}}, {{violationId}}, {{dueDate}}, {{priority}}, {{status}}"/>
-            <div style={{padding:16,display:"grid",gap:12}}>
-              <FormGroup label="Subject">
-                <Input value={current.subject} onChange={v=>updateTemplate("subject",v)}/>
-              </FormGroup>
-              <FormGroup label="Email Body">
-                <Textarea value={current.body} onChange={v=>updateTemplate("body",v)} rows={12}/>
-              </FormGroup>
-            </div>
-          </Card>
-          <Card>
-            <CardHeader title="Send Test Email" subtitle="Server-side SMTP uses EMAIL_USER and EMAIL_PASS in Vercel"/>
-            <div style={{padding:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-              <Input type="email" value={testEmail} onChange={setTestEmail} placeholder="recipient@company.com" style={{maxWidth:320}}/>
-              <Btn variant="primary" onClick={sendTest} loading={sending}>Send Test</Btn>
-            </div>
-          </Card>
+        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.25fr) minmax(320px,.75fr)",gap:16}}>
+          <div>
+            <Card style={{marginBottom:16}}>
+              <CardHeader title={current.name} subtitle="Subject and body"/>
+              <div style={{padding:16,display:"grid",gap:12}}>
+                <FormGroup label="Subject">
+                  <Input value={current.subject} onChange={v=>updateTemplate("subject",v)}/>
+                </FormGroup>
+                <FormGroup label="Variables">
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {EMAIL_TEMPLATE_VARIABLES.map(v=>(
+                      <button key={v} onClick={()=>insertVariable(v)}
+                        style={{border:"1px solid var(--line)",background:"var(--bg)",color:"var(--text3)",borderRadius:"var(--r)",padding:"3px 7px",fontSize:11,fontFamily:"var(--mono)",cursor:"pointer"}}
+                      >{`{{${v}}}`}</button>
+                    ))}
+                  </div>
+                </FormGroup>
+                <FormGroup label="Email Body">
+                  <Textarea value={current.body} onChange={v=>updateTemplate("body",v)} rows={13}/>
+                </FormGroup>
+              </div>
+            </Card>
+            <Card>
+              <CardHeader title="Send Test Email" subtitle="SMTP uses EMAIL_USER and EMAIL_PASS"/>
+              <div style={{padding:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <Input type="email" value={testEmail} onChange={setTestEmail} placeholder="recipient@company.com" style={{maxWidth:320}}/>
+                <Btn variant="primary" onClick={sendTest} loading={sending}>Send Test</Btn>
+              </div>
+            </Card>
+          </div>
+          <div>
+            <Card style={{marginBottom:16,overflow:"hidden"}}>
+              <CardHeader title="Live Preview" subtitle={interpolate(current.subject)}/>
+              <div style={{background:"#F3F4F6",padding:14}}>
+                <div style={{maxWidth:520,margin:"0 auto",background:"#FFFFFF",border:"1px solid var(--line)",borderRadius:"var(--r2)",overflow:"hidden",boxShadow:"var(--sh)"}}>
+                  <div style={{background:"#111827",color:"#FFFFFF",padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                    <div style={{fontWeight:700,letterSpacing:".02em"}}>ONEPWS PVMS</div>
+                    <div style={{fontSize:11,color:"#FCA5A5",textTransform:"uppercase",letterSpacing:".08em"}}>Automated Mail</div>
+                  </div>
+                  <div style={{padding:18}}>
+                    <div style={{fontSize:15,fontWeight:700,color:"#111827",marginBottom:12}}>{interpolate(current.subject)}</div>
+                    <div dangerouslySetInnerHTML={{__html:bodyPreviewHtml}}/>
+                  </div>
+                  <div style={{background:"#F9FAFB",borderTop:"1px solid var(--line)",padding:"10px 16px",fontSize:11,color:"var(--text3)"}}>
+                    PVMS Automation System | ONEPWS Pvt. Ltd.
+                  </div>
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <CardHeader title="Automation Rules"/>
+              <div style={{padding:0}}>
+                {automationRules.map((rule,i)=>(
+                  <div key={rule.event} style={{padding:"11px 14px",borderBottom:i<automationRules.length-1?"1px solid var(--line)":"none"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:5}}>
+                      <div style={{fontSize:12.5,fontWeight:600,color:"var(--text)"}}>{rule.event}</div>
+                      <span style={{fontSize:10,fontWeight:700,color:"var(--green)",background:"var(--green-bg)",border:"1px solid var(--green-bd)",borderRadius:10,padding:"1px 7px"}}>Active</span>
+                    </div>
+                    <div style={{fontSize:11,color:"var(--text3)"}}>Template: {rule.template}</div>
+                    <div style={{fontSize:11,color:"var(--text3)"}}>To: {rule.to} | CC: {rule.cc}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
         </div>
       </div>
     </div>
