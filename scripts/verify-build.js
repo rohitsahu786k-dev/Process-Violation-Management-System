@@ -38,6 +38,19 @@ function collectJsFiles(relativeDir) {
   });
 }
 
+function collectApiFunctionFiles(relativeDir = "api") {
+  const dir = path.join(rootDir, relativeDir);
+  if (!fs.existsSync(dir)) return [];
+
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    if (entry.name.startsWith("_") || entry.name.startsWith(".")) return [];
+    const relativePath = path.join(relativeDir, entry.name);
+    if (entry.isDirectory()) return collectApiFunctionFiles(relativePath);
+    if (!entry.isFile() || entry.name.endsWith(".d.ts")) return [];
+    return /\.(js|mjs|cjs|ts)$/.test(entry.name) ? [relativePath] : [];
+  });
+}
+
 const packageJson = readJson("package.json");
 const vercelJson = readJson("vercel.json");
 
@@ -67,6 +80,9 @@ assert(indexHtml.includes('<div id="root"></div>'), "index.html is missing the R
 assert(indexHtml.includes('script type="text/babel"'), "index.html is missing the Babel React script.");
 assert(indexHtml.includes("ReactDOM.createRoot"), "index.html is missing the React mount call.");
 assert(indexHtml.includes("/api/sync"), "index.html is missing the sync API integration.");
+
+const apiFunctions = collectApiFunctionFiles();
+assert(apiFunctions.length <= 12, `Vercel Hobby supports 12 serverless functions; found ${apiFunctions.length}: ${apiFunctions.join(", ")}`);
 
 for (const file of [...collectJsFiles("api"), ...collectJsFiles("scripts")]) {
   execFileSync(process.execPath, ["--check", path.join(rootDir, file)], { stdio: "pipe" });
