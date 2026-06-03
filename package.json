@@ -3,16 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vercel dev",
-    "start": "vercel dev"
+    "build": "node scripts/build-static.js",
+    "dev": "npx vercel dev",
+    "start": "npm run dev"
   },
   "dependencies": {
     "cloudinary": "^2.10.0",
     "formidable": "^3.5.4",
     "mongodb": "^6.15.0",
-    "nodemailer": "^6.10.1"
-  },
-  "devDependencies": {
-    "vercel": "^41.7.3"
+    "nodemailer": "^8.0.10"
   }
 }
