@@ -141,7 +141,7 @@ async function sendEmail({ to, cc, subject, html, text, skipCc }) {
   const transporter = createTransporter();
   const toList = uniqueAddresses(to);
   const ccList = skipCc
-    ? []
+    ? uniqueAddresses(cc).filter(address => !toList.some(item => item.toLowerCase() === address.toLowerCase()))
     : uniqueAddresses(cc, ALWAYS_CC).filter(address => !toList.some(item => item.toLowerCase() === address.toLowerCase()));
   return transporter.sendMail({
     from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
