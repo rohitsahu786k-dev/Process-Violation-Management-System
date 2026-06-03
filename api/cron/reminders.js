@@ -1,9 +1,9 @@
 const { getDb } = require("../_lib/db");
-const { sendEmail, renderTemplate } = require("../_lib/email");
+const { sendEmail, renderTemplate, normalizePortalUrl } = require("../_lib/email");
 
 const defaultTemplate = {
   subject: "PVMS Reminder: {{violationId}} requires action",
-  body: "Dear {{userName}},\n\nThis is an automated reminder for {{violationId}}.\n\nDue Date: {{dueDate}}\nStatus: {{status}}\n\nRegards,\nPVMS Automation System"
+  body: "Dear {{userName}},\n\nThis is an automated reminder for {{violationId}}.\n\nCase Description: {{caseDescription}}\nDue Date: {{dueDate}}\nStatus: {{status}}\nPVMS Portal: {{portalUrl}}\n\nRegards,\nPVMS Automation System"
 };
 
 module.exports = async function handler(req, res) {
@@ -24,8 +24,10 @@ module.exports = async function handler(req, res) {
         const rendered = renderTemplate(reminder.template || defaultTemplate, {
           userName: reminder.userName || "PVMS User",
           violationId: reminder.violationId || "PVMS",
+          caseDescription: reminder.caseDescription || reminder.description || "",
           dueDate: reminder.dueDate ? new Date(reminder.dueDate).toLocaleDateString("en-IN") : "",
-          status: reminder.status || "Pending"
+          status: reminder.status || "Pending",
+          portalUrl: normalizePortalUrl(reminder.portalUrl)
         });
         await sendEmail({ to: reminder.email, ...rendered });
         sent++;

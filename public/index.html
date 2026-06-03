@@ -287,7 +287,8 @@ async function notifyCaseEvent(eventType, violation) {
       closureDate: formatEmailDate(new Date()),
       assignedHOD: hod?.name || violation.assignedHOD || "Department HOD",
       assignedInvestigator: assignedInvestigator?.name || violation.assignedInvestigator || "",
-      portalUrl: typeof window !== "undefined" ? window.location.origin : ""
+      caseDescription: violation.description || "",
+      portalUrl: getPortalUrl()
     };
 
     await fetch("/api/email/notification", {
@@ -302,7 +303,7 @@ async function requestPasswordResetEmail(email, requestedBy = "Self Service") {
   const res = await fetch("/api/email/password-reset", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, requestedBy })
+    body: JSON.stringify({ email, requestedBy, portalUrl: getPortalUrl() })
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Password reset email failed");
@@ -316,6 +317,14 @@ const APP_VERSION = "1.0.0";
 const COMPANY_NAME = "ONEPWS Pvt. Ltd.";
 const COMPANY_SHORT = "ONEPWS";
 const ISO_CERTS = "ISO 9001:2015 | ISO 14001:2015 | ISO 45001:2018";
+const PVMS_PORTAL_URL = "https://pvms.onepws.com";
+
+function getPortalUrl() {
+  if (typeof window !== "undefined" && window.location?.origin && window.location.origin !== "null") {
+    return window.location.origin;
+  }
+  return PVMS_PORTAL_URL;
+}
 
 const SEVERITY_CONFIG = {
   Minor:    { color:"#16A34A", bg:"#F0FDF4", bd:"#86EFAC", score:-2,  level:1 },
@@ -384,39 +393,66 @@ const DEFAULT_EMAIL_TEMPLATES = [
     id:"caseRegistered",
     name:"New Case Registered",
     subject:"New PVMS Case Registered: {{violationId}}",
-    body:"Dear {{employeeName}},\n\nA new PVMS case has been registered and routed for review.\n\nCase ID: {{violationId}}\nDepartment: {{department}}\nCategory: {{category}}\nSeverity: {{severity}}\nIncident Date: {{incidentDate}}\nAssigned HOD: {{assignedHOD}}\nStatus: {{status}}\n\nThe assigned HOD and management team have also been notified for visibility and required action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{employeeName}},\n\nA new PVMS case has been registered and routed for review.\n\nCase ID: {{violationId}}\nDepartment: {{department}}\nCategory: {{category}}\nSeverity: {{severity}}\nIncident Date: {{incidentDate}}\nAssigned HOD: {{assignedHOD}}\nStatus: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nThe assigned HOD and management team have also been notified for visibility and required action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"caseClosed",
     name:"Case Closure Notice",
     subject:"PVMS Case Closed: {{violationId}}",
-    body:"Dear {{employeeName}},\n\nThe PVMS case listed below has been closed after review and completion of required actions.\n\nCase ID: {{violationId}}\nDepartment: {{department}}\nCategory: {{category}}\nSeverity: {{severity}}\nClosure Date: {{closureDate}}\nFinal Status: {{status}}\n\nThe HOD and management team have been copied for record and compliance tracking.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{employeeName}},\n\nThe PVMS case listed below has been closed after review and completion of required actions.\n\nCase ID: {{violationId}}\nDepartment: {{department}}\nCategory: {{category}}\nSeverity: {{severity}}\nClosure Date: {{closureDate}}\nFinal Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nThe HOD and management team have been copied for record and compliance tracking.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"due",
     name:"Due Date Reminder",
     subject:"PVMS Reminder: {{violationId}} is due on {{dueDate}}",
-    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS action assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nDue Date: {{dueDate}}\nCurrent Status: {{status}}\n\nPlease complete the required action before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS action assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nDue Date: {{dueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the required action before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"escalation",
     name:"Escalation Reminder",
     subject:"PVMS Escalation: {{violationId}} is overdue",
-    body:"Dear Manager,\n\nThe following PVMS case has crossed its due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nDue Date: {{dueDate}}\nPending Since: {{pendingDays}} days\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear Manager,\n\nThe following PVMS case has crossed its due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nDue Date: {{dueDate}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"summary",
     name:"Monthly Summary",
     subject:"PVMS Monthly Summary - {{summaryMonth}}",
-    body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Cases: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Cases: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\nCase Description Summary: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"passwordReset",
     name:"Password Reset",
     subject:"PVMS Password Reset Instructions",
-    body:"Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nTemporary Password: {{temporaryPassword}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\n\nPlease sign in and contact the PVMS administrator if this request was not initiated by you.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nTemporary Password: {{temporaryPassword}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\nPVMS Portal: {{portalUrl}}\n\nPlease sign in using the temporary password above.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   }
 ];
+
+function insertBeforeRegards(body, line) {
+  const value = String(body || "");
+  if (value.includes(line)) return value;
+  const marker = "\n\nRegards,";
+  const index = value.indexOf(marker);
+  if (index >= 0) return `${value.slice(0, index)}\n${line}${value.slice(index)}`;
+  return `${value}\n\n${line}`;
+}
+
+function ensureRequiredEmailTemplateContent(template) {
+  const caseDescriptionTemplates = ["caseRegistered", "caseClosed", "due", "escalation", "summary"];
+  let body = String(template.body || "");
+
+  if (caseDescriptionTemplates.includes(template.id) && !body.includes("{{caseDescription}}")) {
+    const line = template.id === "summary"
+      ? "Case Description Summary: {{caseDescription}}"
+      : "Case Description: {{caseDescription}}";
+    body = insertBeforeRegards(body, line);
+  }
+
+  if (!body.includes("{{portalUrl}}")) {
+    body = insertBeforeRegards(body, "PVMS Portal: {{portalUrl}}");
+  }
+
+  return { ...template, body };
+}
 
 function getEmailTemplates() {
   const saved = DB.get("emailTemplates", []);
@@ -424,7 +460,7 @@ function getEmailTemplates() {
   const savedById = new Map(savedList.filter(t => t && t.id).map(t => [t.id, t]));
   const mergedDefaults = DEFAULT_EMAIL_TEMPLATES.map(t => ({ ...t, ...(savedById.get(t.id) || {}) }));
   const custom = savedList.filter(t => t && t.id && !DEFAULT_EMAIL_TEMPLATES.some(d => d.id === t.id));
-  return [...mergedDefaults, ...custom];
+  return [...mergedDefaults, ...custom].map(ensureRequiredEmailTemplateContent);
 }
 
 function getEmailTemplateById(id) {
@@ -435,7 +471,7 @@ const EMAIL_TEMPLATE_VARIABLES = [
   "employeeName","userName","violationId","department","category","severity","status",
   "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
   "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount",
-  "email","temporaryPassword","resetRequestedBy","resetTime"
+  "email","temporaryPassword","resetRequestedBy","resetTime","caseDescription","portalUrl"
 ];
 
 // ============================================================
@@ -468,6 +504,40 @@ function activeMasterOptions(key, fallback) {
   return (DB.get(key) || fallback.map((name, i) => ({ id: key + i, name, active: true })))
     .filter(item => item.active !== false)
     .map(item => item.name);
+}
+
+function optionsWithCurrent(options, current) {
+  const normalized = new Set();
+  const result = [];
+  [...(options || []), current].forEach(option => {
+    const value = String(option || "").trim();
+    const key = value.toLowerCase();
+    if (value && !normalized.has(key)) {
+      normalized.add(key);
+      result.push(value);
+    }
+  });
+  return result;
+}
+
+async function syncStateFromServer() {
+  const res = await fetch('/api/sync');
+  if (!res.ok) throw new Error("Unable to sync PVMS data");
+  const data = await res.json();
+  if (data && typeof data === 'object') {
+    const preservedUser = localStorage.getItem("pvms2_currentUser");
+    for (const key of Object.keys(data)) {
+      if (key === 'currentUser') continue;
+      localStorage.setItem("pvms2_" + key, JSON.stringify(data[key]));
+    }
+    if (preservedUser) localStorage.setItem("pvms2_currentUser", preservedUser);
+  }
+  return data;
+}
+
+function passwordCandidatesForUser(user) {
+  const fallback = user?.role === "Master Admin" ? "admin123" : "password123";
+  return optionsWithCurrent([user?.password, user?.temporaryPassword, user?.tempPassword, fallback], "");
 }
 
 function isCaseEmployeeUser(user) {
@@ -726,25 +796,30 @@ function LoginPage({ onLogin }) {
   const [resetLoading, setResetLoading] = useState(false);
   const [error, setError] = useState("");
   const [resetMessage, setResetMessage] = useState("");
-  const handle = () => {
+  const handle = async () => {
     setError(""); setResetMessage(""); setLoading(true);
-    setTimeout(() => {
+    try {
+      await syncStateFromServer().catch(err => console.warn("Login sync skipped:", err));
       // Always seed before login so users table is populated
       seedIfEmpty();
       const users = DB.get("users", []);
-      const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      const user = users.find(u => (u.email || "").toLowerCase() === email.trim().toLowerCase());
 
       if (!user) { setError("User account not found in database."); setLoading(false); return; }
 
-      const expectedPwd = user.role === "Master Admin" ? "admin123" : "password123";
-      if (password !== expectedPwd) { setError("Invalid password."); setLoading(false); return; }
+      const validPasswords = passwordCandidatesForUser(user);
+      if (!validPasswords.includes(password)) { setError("Invalid password."); setLoading(false); return; }
 
       const logs = DB.get("auditLogs", []);
       logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"LOGIN", entity:"-", detail:"Successful login", ip:"192.168.1."+Math.floor(Math.random()*50+10) });
       DB.set("auditLogs", logs);
       DB.set("currentUser", user);
       onLogin(user);
-    }, 600);
+    } catch (err) {
+      setError(err.message || "Unable to sign in.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const forgotPassword = async () => {
@@ -2597,9 +2672,11 @@ function EmailIntegrationPage({ user, toast }) {
     overdueCount:"1",
     closedCount:"18",
     email:"amit.sharma@example.com",
-    temporaryPassword:"password123",
+    temporaryPassword:"PVMS-A7K9Q2LM",
     resetRequestedBy:"Master Admin",
-    resetTime:"03 Jun 2026, 10:45 am"
+    resetTime:"03 Jun 2026, 10:45 am",
+    caseDescription:"Operator bypassed the approved process checklist before dispatch approval.",
+    portalUrl:getPortalUrl()
   };
 
   const current = templates.find(t => t.id === selected) || templates[0] || DEFAULT_EMAIL_TEMPLATES[0];
@@ -2650,7 +2727,7 @@ function EmailIntegrationPage({ user, toast }) {
   const automationRules = [
     { event:"New case registered", template:"New Case Registered", to:"Employee", cc:"HOD, Management" },
     { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
-    { event:"Password reset", template:"Password Reset", to:"User", cc:"None" },
+    { event:"Password reset", template:"Password Reset", to:"User", cc:"Default management CC" },
     { event:"Due reminder", template:"Due Date Reminder", to:"Owner", cc:"Escalation chain" },
     { event:"Overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
   ];
@@ -2954,7 +3031,7 @@ function UsersPage({ user, toast }) {
             <FormGroup label="Email" required><Input type="email" value={form.email} onChange={v=>setForm(f=>({...f,email:v}))} placeholder="email@company.com"/></FormGroup>
             <FormGroup label="Employee Code"><Input value={form.empCode} onChange={v=>setForm(f=>({...f,empCode:v}))} placeholder="EMP-0000"/></FormGroup>
             <FormGroup label="Department"><Select value={form.dept} onChange={v=>setForm(f=>({...f,dept:v}))} options={activeMasterOptions("masterDepts", DEPARTMENTS)} placeholder="Select dept"/></FormGroup>
-            <FormGroup label="Designation"><Select value={form.designation} onChange={v=>setForm(f=>({...f,designation:v}))} options={DESIGNATIONS} placeholder="Select designation"/></FormGroup>
+            <FormGroup label="Designation"><Select value={form.designation} onChange={v=>setForm(f=>({...f,designation:v}))} options={optionsWithCurrent(activeMasterOptions("masterDesigs", DESIGNATIONS), form.designation)} placeholder="Select designation"/></FormGroup>
             <FormGroup label="Role"><Select value={form.role} onChange={v=>setForm(f=>({...f,role:v}))} options={ROLES}/></FormGroup>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,cursor:"pointer"}}>
@@ -3784,16 +3861,7 @@ function App() {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
-    fetch('/api/sync').then(r => r.json()).then(data => {
-      if (data && typeof data === 'object') {
-        // Preserve currentUser session across sync - don't overwrite with server data
-        const preservedUser = localStorage.getItem("pvms2_currentUser");
-        for (const key of Object.keys(data)) {
-          if (key === 'currentUser') continue; // Never overwrite local session from server
-          localStorage.setItem("pvms2_" + key, JSON.stringify(data[key]));
-        }
-        if (preservedUser) localStorage.setItem("pvms2_currentUser", preservedUser);
-      }
+    syncStateFromServer().then(() => {
       seedIfEmpty();
       setNotifications(DB.get("notifications",[]) || []);
       // Re-read user from localStorage after sync in case user data was updated

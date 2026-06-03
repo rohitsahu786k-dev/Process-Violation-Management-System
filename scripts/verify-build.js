@@ -76,10 +76,27 @@ for (const file of staticFiles) {
 assert(filesEqual("index.html", "PVMS_Portal V4.html"), "index.html and PVMS_Portal V4.html must stay identical.");
 
 const indexHtml = fs.readFileSync(path.join(rootDir, "index.html"), "utf8");
+const emailLib = fs.readFileSync(path.join(rootDir, "api/_lib/email.js"), "utf8");
 assert(indexHtml.includes('<div id="root"></div>'), "index.html is missing the React root element.");
 assert(indexHtml.includes('script type="text/babel"'), "index.html is missing the Babel React script.");
 assert(indexHtml.includes("ReactDOM.createRoot"), "index.html is missing the React mount call.");
 assert(indexHtml.includes("/api/sync"), "index.html is missing the sync API integration.");
+assert(indexHtml.includes("{{caseDescription}}"), "Email templates must include the case description variable.");
+assert(indexHtml.includes("{{portalUrl}}"), "Email templates must include the portal URL variable.");
+assert(indexHtml.includes('activeMasterOptions("masterDesigs", DESIGNATIONS)'), "User designation dropdown must use Master Data designations.");
+assert(!emailLib.includes("Please do not reply directly to this mailbox"), "Email footer still contains the removed no-reply sentence.");
+[
+  "sarit.jain@onepws.com",
+  "ankit.chittora@onepws.com",
+  "mukesh.menaria@onepws.com",
+  "atal.tripathi@onepws.com",
+  "amit.sukhwal@onepws.com",
+  "puneet@onepws.com",
+  "kanishka@onepws.com",
+  "process@onepws.com"
+].forEach(email => {
+  assert(emailLib.includes(email), `Required always-CC address missing: ${email}`);
+});
 
 const apiFunctions = collectApiFunctionFiles();
 assert(apiFunctions.length <= 12, `Vercel Hobby supports 12 serverless functions; found ${apiFunctions.length}: ${apiFunctions.join(", ")}`);

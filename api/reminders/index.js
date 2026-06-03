@@ -19,6 +19,7 @@ module.exports = async function handler(req, res) {
         userId: payload.userId || "",
         email: payload.email,
         violationId: payload.violationId || "",
+        caseDescription: payload.caseDescription || payload.description || "",
         dueDate: payload.dueDate ? new Date(payload.dueDate) : null,
         reminderBefore: Number(payload.reminderBefore || 0),
         status: payload.status || "Pending",

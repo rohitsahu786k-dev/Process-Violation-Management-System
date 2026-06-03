@@ -1,11 +1,11 @@
 const { getDb } = require("../_lib/db");
-const { sendEmail, renderTemplate } = require("../_lib/email");
+const { sendEmail, renderTemplate, normalizePortalUrl } = require("../_lib/email");
 
 const passwordResetTemplate = {
   id: "passwordReset",
   name: "Password Reset",
   subject: "PVMS Password Reset Instructions",
-  body: "Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nTemporary Password: {{temporaryPassword}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\n\nPlease sign in and contact the PVMS administrator if this request was not initiated by you.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  body: "Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nTemporary Password: {{temporaryPassword}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\nPVMS Portal: {{portalUrl}}\n\nPlease sign in using the temporary password above.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
 };
 
 function routeAction(req) {
@@ -19,9 +19,11 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
-function defaultPasswordFor(user) {
-  if (user.role === "Master Admin") return "admin123";
-  return "password123";
+function generateTemporaryPassword() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  let value = "PVMS-";
+  for (let i = 0; i < 8; i++) value += chars[Math.floor(Math.random() * chars.length)];
+  return value;
 }
 
 function formatLocalTime(date) {
@@ -64,6 +66,7 @@ async function handlePasswordReset(req, res) {
 
   const email = normalizeEmail(req.body?.email);
   const requestedBy = String(req.body?.requestedBy || "Forgot Password").trim();
+  const portalUrl = normalizePortalUrl(req.body?.portalUrl);
   if (!email) return res.status(400).json({ error: "Email is required" });
 
   try {
@@ -81,12 +84,24 @@ async function handlePasswordReset(req, res) {
       ? state.emailTemplates.find(t => t && t.id === "passwordReset")
       : null;
     const template = savedTemplate || passwordResetTemplate;
+    const temporaryPassword = generateTemporaryPassword();
+    const updatedUsers = users.map(u => normalizeEmail(u.email) === email
+      ? { ...u, password: temporaryPassword, passwordUpdatedAt: Date.now(), mustChangePassword: true }
+      : u
+    );
+    await db.collection("appState").updateOne(
+      { _id: "global" },
+      { $set: { users: updatedUsers } },
+      { upsert: true }
+    );
+
     const rendered = renderTemplate(template, {
       userName: user.name || "PVMS User",
       email,
-      temporaryPassword: defaultPasswordFor(user),
+      temporaryPassword,
       resetRequestedBy: requestedBy || "PVMS Admin",
-      resetTime: formatLocalTime(new Date())
+      resetTime: formatLocalTime(new Date()),
+      portalUrl
     });
 
     try {
@@ -134,7 +149,8 @@ async function handleTest(req, res) {
       email: "pvms.user@example.com",
       temporaryPassword: "password123",
       resetRequestedBy: "Master Admin",
-      resetTime: formatLocalTime(now)
+      resetTime: formatLocalTime(now),
+      portalUrl: normalizePortalUrl(req.body?.portalUrl)
     });
     await sendEmail({ to, ...rendered });
     return res.status(200).json({ ok: true });
