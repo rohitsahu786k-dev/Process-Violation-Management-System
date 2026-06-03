@@ -4,7 +4,7 @@ const { deleteFromCloudinary } = require("../_lib/cloudinaryService");
 const { cloudinaryResourceType } = require("../_lib/mediaHelpers");
 
 module.exports = async function handler(req, res) {
-  if (req.method !== "DELETE" && req.method !== "PATCH") {
+  if (req.method !== "DELETE" && req.method !== "PATCH" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
@@ -18,7 +18,7 @@ module.exports = async function handler(req, res) {
     const db = await getDb();
     const media = db.collection("media");
 
-    if (req.method === "PATCH") {
+    if (req.method === "PATCH" || (req.method === "POST" && action !== "trash" && action !== "permanent")) {
       const updates = { updatedAt: new Date() };
       if (tags !== undefined) updates.tags = tags;
       if (isFavorite !== undefined) updates.isFavorite = !!isFavorite;

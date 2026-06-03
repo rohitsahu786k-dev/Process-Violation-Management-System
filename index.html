@@ -3628,7 +3628,7 @@ function MediaLibraryPage({ user, toast }) {
     if (!window.confirm(`Delete ${selected.length} item(s)?`)) return;
     try {
       await mediaApi("/bulk", {
-        method: "DELETE",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: selected, action: permanent ? "permanent" : "trash" }),
       });

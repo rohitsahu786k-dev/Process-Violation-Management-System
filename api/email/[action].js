@@ -105,7 +105,7 @@ async function handlePasswordReset(req, res) {
     });
 
     try {
-      await sendEmail({ to: email, ...rendered });
+      await sendEmail({ to: email, ...rendered, skipCc: true });
       await logEmail({ type: "password-reset", to: email, subject: rendered.subject, status: "sent", requestedBy });
       return res.status(200).json({ ok: true, sent: true });
     } catch (sendError) {

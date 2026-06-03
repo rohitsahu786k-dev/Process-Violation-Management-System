@@ -9,7 +9,8 @@ const ALWAYS_CC = [
   "amit.sukhwal@onepws.com",
   "puneet@onepws.com",
   "kanishka@onepws.com",
-  "process@onepws.com"
+  "process@onepws.com",
+  "jatin.chouhan@onepws.com"
 ];
 
 function normalizePortalUrl(value) {
@@ -136,10 +137,12 @@ function createTransporter() {
   });
 }
 
-async function sendEmail({ to, cc, subject, html, text }) {
+async function sendEmail({ to, cc, subject, html, text, skipCc }) {
   const transporter = createTransporter();
   const toList = uniqueAddresses(to);
-  const ccList = uniqueAddresses(cc, ALWAYS_CC).filter(address => !toList.some(item => item.toLowerCase() === address.toLowerCase()));
+  const ccList = skipCc
+    ? []
+    : uniqueAddresses(cc, ALWAYS_CC).filter(address => !toList.some(item => item.toLowerCase() === address.toLowerCase()));
   return transporter.sendMail({
     from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
     to: toList,
