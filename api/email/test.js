@@ -15,15 +15,15 @@ module.exports = async function handler(req, res) {
       severity: "Major",
       priority: "Major",
       dueDate: new Date().toISOString().slice(0, 10),
-      incidentDate: new Date().toLocaleDateString("en-IN"),
-      closureDate: new Date().toLocaleDateString("en-IN"),
+      incidentDate: `${new Date().getDate()}/${new Date().getMonth() + 1}/${new Date().getFullYear()}`,
+      closureDate: `${new Date().getDate()}/${new Date().getMonth() + 1}/${new Date().getFullYear()}`,
       status: "Submitted",
       assignedUser: "PVMS User",
       assignedHOD: "Department HOD",
       assignedInvestigator: "PVMS Investigator",
       pendingDays: "2",
-      summaryDate: new Date().toLocaleDateString("en-IN"),
-      summaryMonth: new Date().toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+      summaryDate: `${new Date().getDate()}/${new Date().getMonth() + 1}/${new Date().getFullYear()}`,
+      summaryMonth: `${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][new Date().getMonth()]} ${new Date().getFullYear()}`,
       openCount: "0",
       pendingCount: "0",
       overdueCount: "0",
@@ -31,7 +31,7 @@ module.exports = async function handler(req, res) {
       email: "pvms.user@example.com",
       temporaryPassword: "password123",
       resetRequestedBy: "Master Admin",
-      resetTime: new Date().toLocaleString("en-IN")
+      resetTime: `${new Date().getDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][new Date().getMonth()]} ${new Date().getFullYear()}, ${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`
     });
     await sendEmail({ to, ...rendered });
     return res.status(200).json({ ok: true });

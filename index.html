@@ -1731,6 +1731,20 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               </div>
             )}
             {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
+            {user.role === "Master Admin" && (
+              <Btn size="sm" variant="danger" onClick={() => {
+                if (window.confirm("Permanently delete case " + violation.id + "? This cannot be undone.")) {
+                  const vs = DB.get("violations",[]);
+                  const next = vs.filter(v=>v.id!==violation.id);
+                  DB.set("violations", next);
+                  const logs = DB.get("auditLogs", []);
+                  logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"CASE_DELETED", entity:violation.id, detail:`Deleted case for ${violation.empName || "unknown employee"}`, ip:"local" });
+                  DB.set("auditLogs", logs);
+                  toast(`Case ${violation.id} deleted`, "success");
+                  setPage("cases");
+                }
+              }} icon={<Icon name="trash" size={12}/>}>Delete</Btn>
+            )}
           </>
         }
       />
@@ -2880,20 +2894,21 @@ function UsersPage({ user, toast }) {
         const name = String(row.SPOCName || "").trim();
         if (!email || !name) return;
         const existingIndex = current.findIndex(u => (u.email || "").toLowerCase() === email);
+        const existingUser = existingIndex >= 0 ? current[existingIndex] : null;
         const record = {
           name,
           email,
           dept: String(row.DepartmentName || "").trim(),
-          designation: "Employee",
-          role: "User/Employee",
+          designation: existingUser ? (existingUser.designation || "Employee") : "Employee",
+          role: existingUser ? (existingUser.role || "User/Employee") : "User/Employee",
           active: String(row.Status || "Active").toLowerCase() !== "inactive",
           reportingToName: String(row.ReportingToName || "").trim(),
           reportingToEmail: String(row.ReportingToEmail || "").trim(),
           hodBuhEmail: String(row.HODBUHEmail || "").trim(),
           managementEmail: String(row.ManagementEmail || "").trim(),
-          empCode: existingIndex >= 0 ? current[existingIndex].empCode : `EMP-${String(Date.now() + index).slice(-6)}`,
-          complianceScore: existingIndex >= 0 ? current[existingIndex].complianceScore : 100,
-          violations: existingIndex >= 0 ? current[existingIndex].violations : 0,
+          empCode: existingUser ? existingUser.empCode : `EMP-${String(Date.now() + index).slice(-6)}`,
+          complianceScore: existingUser ? existingUser.complianceScore : 100,
+          violations: existingUser ? existingUser.violations : 0,
         };
         if (existingIndex >= 0) {
           current[existingIndex] = { ...current[existingIndex], ...record };

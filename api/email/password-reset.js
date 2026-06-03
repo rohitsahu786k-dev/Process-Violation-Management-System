@@ -47,12 +47,18 @@ module.exports = async function handler(req, res) {
       ? state.emailTemplates.find(t => t && t.id === "passwordReset")
       : null;
     const template = savedTemplate || defaultTemplate;
+    const formatLocalTime = (d) => {
+      const pad = n => String(n).padStart(2, '0');
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
     const rendered = renderTemplate(template, {
       userName: user.name || "PVMS User",
       email,
       temporaryPassword: defaultPasswordFor(user),
       resetRequestedBy: requestedBy || "PVMS Admin",
-      resetTime: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
+      resetTime: formatLocalTime(new Date())
     });
 
     try {
