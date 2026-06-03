@@ -27,7 +27,11 @@ module.exports = async function handler(req, res) {
       openCount: "0",
       pendingCount: "0",
       overdueCount: "0",
-      closedCount: "0"
+      closedCount: "0",
+      email: "pvms.user@example.com",
+      temporaryPassword: "password123",
+      resetRequestedBy: "Master Admin",
+      resetTime: new Date().toLocaleString("en-IN")
     });
     await sendEmail({ to, ...rendered });
     return res.status(200).json({ ok: true });

@@ -281,7 +281,7 @@ async function notifyCaseEvent(eventType, violation) {
       category: violation.category || "",
       severity: violation.severity || "",
       priority: violation.severity || "",
-      status: isClosed ? "Closed" : (violation.status || "Submitted"),
+      status: isClosed ? "Closed" : caseStatusLabel(violation.status || "Open"),
       incidentDate: formatEmailDate(violation.date),
       dueDate: formatEmailDate(violation.dueDate),
       closureDate: formatEmailDate(new Date()),
@@ -296,6 +296,17 @@ async function notifyCaseEvent(eventType, violation) {
       body: JSON.stringify({ to: to.join(","), cc: cc.join(","), template, variables })
     });
   } catch (err) { console.error("notifyCaseEvent failed", err); }
+}
+
+async function requestPasswordResetEmail(email, requestedBy = "Self Service") {
+  const res = await fetch("/api/email/password-reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, requestedBy })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Password reset email failed");
+  return data;
 }
 
 // ============================================================
@@ -315,6 +326,7 @@ const SEVERITY_CONFIG = {
 
 const STATUS_CONFIG = {
   Draft:                { color:"#6B7E9A", bg:"#F0F3F8", label:"Draft" },
+  Open:                 { color:"#1B6EF3", bg:"#EBF3FF", label:"Open" },
   Submitted:            { color:"#1B6EF3", bg:"#EBF3FF", label:"Submitted" },
   "Under Review":       { color:"#7C3AED", bg:"#EDE9FE", label:"Under Review" },
   "Under Investigation":{ color:"#D97706", bg:"#FFFBEB", label:"Investigating" },
@@ -324,6 +336,34 @@ const STATUS_CONFIG = {
   Rejected:             { color:"#B91C1C", bg:"#FEE8E8", label:"Rejected" },
   Overdue:              { color:"#B91C1C", bg:"#FEE8E8", label:"Overdue" },
 };
+
+const CASE_STATUS_OPTIONS = [
+  { value:"Draft", label:"Draft" },
+  { value:"Open", label:"Open" },
+  { value:"Under Investigation", label:"Investigating" },
+  { value:"CAPA Pending", label:"CAPA Pending" },
+  { value:"Overdue", label:"Overdue" },
+  { value:"Closed", label:"Closed" },
+];
+
+function normalizeCaseStatus(status) {
+  if (status === "Submitted" || status === "Under Review") return "Open";
+  return status || "Open";
+}
+
+function caseStatusLabel(status) {
+  const normalized = normalizeCaseStatus(status);
+  return CASE_STATUS_OPTIONS.find(s => s.value === normalized)?.label || STATUS_CONFIG[normalized]?.label || normalized;
+}
+
+function isCaseDateOverdue(violation) {
+  return violation?.dueDate && new Date(violation.dueDate) < new Date() && !["Closed","Rejected","Archived"].includes(violation.status);
+}
+
+function effectiveCaseStatus(violation) {
+  if (violation?.status === "Overdue" || isCaseDateOverdue(violation)) return "Overdue";
+  return normalizeCaseStatus(violation?.status);
+}
 
 const ROLES = ["Master Admin","Management","HOD","Process Dept Rep","User/Employee"];
 const DEPARTMENTS = ["PWS Floor","Admin Interiors-Onepws","WMSPL","CD-Onepws","CR-Onepws","Common-Onepws"];
@@ -369,6 +409,12 @@ const DEFAULT_EMAIL_TEMPLATES = [
     name:"Monthly Summary",
     subject:"PVMS Monthly Summary - {{summaryMonth}}",
     body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Cases: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"passwordReset",
+    name:"Password Reset",
+    subject:"PVMS Password Reset Instructions",
+    body:"Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nTemporary Password: {{temporaryPassword}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\n\nPlease sign in and contact the PVMS administrator if this request was not initiated by you.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   }
 ];
 
@@ -388,7 +434,8 @@ function getEmailTemplateById(id) {
 const EMAIL_TEMPLATE_VARIABLES = [
   "employeeName","userName","violationId","department","category","severity","status",
   "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
-  "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount"
+  "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount",
+  "email","temporaryPassword","resetRequestedBy","resetTime"
 ];
 
 // ============================================================
@@ -676,9 +723,11 @@ function LoginPage({ onLogin }) {
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
   const [error, setError] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
   const handle = () => {
-    setError(""); setLoading(true);
+    setError(""); setResetMessage(""); setLoading(true);
     setTimeout(() => {
       // Always seed before login so users table is populated
       seedIfEmpty();
@@ -698,6 +747,21 @@ function LoginPage({ onLogin }) {
     }, 600);
   };
 
+  const forgotPassword = async () => {
+    setError(""); setResetMessage("");
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) { setError("Enter your email address first."); return; }
+    setResetLoading(true);
+    try {
+      await requestPasswordResetEmail(cleanEmail, "Forgot Password");
+      setResetMessage("If this email is registered, password reset instructions have been sent.");
+    } catch (err) {
+      setError(err.message || "Unable to send password reset email.");
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   return (
     <div style={{minHeight:"100vh",background:"#F9FAFB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
       <div style={{width:"100%",maxWidth:420}}>
@@ -713,6 +777,7 @@ function LoginPage({ onLogin }) {
           <h2 style={{fontSize:16,fontWeight:600,color:"#1F2937",marginBottom:20}}>Sign in to your account</h2>
 
           {error && <div style={{background:"var(--red-bg)",border:"1px solid var(--red-bd)",borderRadius:"var(--r)",padding:"8px 12px",color:"var(--red)",fontSize:13,marginBottom:16}}>{error}</div>}
+          {resetMessage && <div style={{background:"var(--green-bg)",border:"1px solid var(--green-bd)",borderRadius:"var(--r)",padding:"8px 12px",color:"var(--green)",fontSize:13,marginBottom:16}}>{resetMessage}</div>}
 
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             <FormGroup label="Email Address" required>
@@ -724,6 +789,11 @@ function LoginPage({ onLogin }) {
                 <button onClick={()=>setShowPwd(!showPwd)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--text3)",cursor:"pointer",fontSize:14}}>{showPwd?"Hide":"Show"}</button>
               </div>
             </FormGroup>
+            <div style={{display:"flex",justifyContent:"flex-end",marginTop:-6}}>
+              <button onClick={forgotPassword} disabled={resetLoading}
+                style={{background:"transparent",border:"none",color:"var(--blue)",fontSize:12,fontWeight:600,cursor:resetLoading?"wait":"pointer",padding:0}}
+              >{resetLoading ? "Sending reset email..." : "Forgot password?"}</button>
+            </div>
             <Btn variant="primary" onClick={handle} loading={loading} style={{width:"100%",justifyContent:"center",padding:"9px 0",fontSize:14}}>Sign In</Btn>
           </div></div>
 
@@ -1089,10 +1159,10 @@ function CasesPage({ user, setPage, setEditId, toast }) {
 
   let filtered = violations.filter(v => {
     if (filterTab === "Overdue") {
-      const ov = v.dueDate && new Date(v.dueDate) < new Date() && !["Closed","Rejected"].includes(v.status);
+      const ov = effectiveCaseStatus(v) === "Overdue";
       if (!ov) return false;
     } else if (filterTab !== "All") {
-      if (v.status !== filterTab) return false;
+      if (normalizeCaseStatus(v.status) !== filterTab) return false;
     }
     if (filterDept && v.dept !== filterDept) return false;
     if (filterSev && v.severity !== filterSev) return false;
@@ -1107,26 +1177,37 @@ function CasesPage({ user, setPage, setEditId, toast }) {
   const paged = filtered.slice((page-1)*PER, page*PER);
 
   const canApprove = ["Master Admin","HOD","Management"].includes(user.role);
+  const canDeleteCase = user.role === "Master Admin";
 
   const updateStatus = (id, status) => {
     const vs = DB.get("violations",[]);
     const idx = vs.findIndex(v=>v.id===id);
     if (idx >= 0) {
-      vs[idx].status = status;
+      const nextStatus = normalizeCaseStatus(status);
+      vs[idx].status = nextStatus;
       vs[idx].auditLog = vs[idx].auditLog || [];
-      vs[idx].auditLog.push({ action:`Status changed to ${status}`, by:user.name, at:Date.now() });
+      vs[idx].auditLog.push({ action:`Status changed to ${caseStatusLabel(nextStatus)}`, by:user.name, at:Date.now() });
       DB.set("violations", vs);
       setViolations([...vs]);
-      toast(`Case ${id} status updated to ${status}`, "success");
-      if (status === "Closed") {
+      toast(`Case ${id} status updated to ${caseStatusLabel(nextStatus)}`, "success");
+      if (nextStatus === "Closed") {
         notifyCaseEvent("Closed", vs[idx]);
       }
     }
   };
 
-  const softDelete = (id) => {
-    if (!window.confirm("Archive this case? It will not be deleted permanently.")) return;
-    updateStatus(id, "Archived");
+  const deleteCase = (id) => {
+    if (!canDeleteCase) { toast("Only Master Admin can delete cases", "error"); return; }
+    if (!window.confirm(`Permanently delete case ${id}? This cannot be undone.`)) return;
+    const vs = DB.get("violations",[]);
+    const target = vs.find(v=>v.id===id);
+    const next = vs.filter(v=>v.id!==id);
+    DB.set("violations", next);
+    setViolations([...next]);
+    const logs = DB.get("auditLogs", []);
+    logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"CASE_DELETED", entity:id, detail:`Deleted case for ${target?.empName || "unknown employee"}`, ip:"local" });
+    DB.set("auditLogs", logs);
+    toast(`Case ${id} deleted`, "success");
   };
 
   const exportExcel = () => {
@@ -1140,7 +1221,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
 
   return (
     <div>
-      <PageHeader title="All Cases" sub={`${violations.length} total violations  ${violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length} open`}
+      <PageHeader title="All Cases" sub={`${violations.length} total violations  ${violations.filter(v=>!["Closed","Rejected","Archived"].includes(v.status)).length} open`}
         actions={
           <>
             <Btn size="sm" icon={<Icon name="download" size={14}/>} onClick={exportExcel}>Export Excel</Btn>
@@ -1174,7 +1255,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
                 <tr><td colSpan={10}><EmptyState icon="inbox" title="No cases found" sub="Try changing your search or filters"/></td></tr>
               )}
               {paged.map(v=>{
-                const isOverdue = v.dueDate && new Date(v.dueDate) < new Date() && !["Closed","Rejected"].includes(v.status);
+                const statusForDisplay = effectiveCaseStatus(v);
                 return (
                   <tr key={v.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                     <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:"var(--blue)",fontWeight:500,whiteSpace:"nowrap"}}>{v.id}</td>
@@ -1184,14 +1265,14 @@ function CasesPage({ user, setPage, setEditId, toast }) {
                     <td style={{padding:"9px 12px"}}><span style={{fontSize:11,background:"var(--bg2)",color:"var(--text2)",padding:"2px 6px",borderRadius:4,border:"1px solid var(--line)",whiteSpace:"nowrap"}}>{v.category}</span></td>
                     <td style={{padding:"9px 12px"}}><Badge severity={v.severity}/></td>
                     <td style={{padding:"9px 12px",textAlign:"center"}}>{v.repeatViolation&&<span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"2px 6px",borderRadius:4,fontWeight:500}}> Repeat</span>}</td>
-                    <td style={{padding:"9px 12px"}}><Badge status={isOverdue?"Overdue":v.status}/></td>
-                    <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:isOverdue?"var(--red)":"var(--text3)",whiteSpace:"nowrap"}}>{v.dueDate||""}</td>
+                    <td style={{padding:"9px 12px"}}><Badge status={statusForDisplay}/></td>
+                    <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:statusForDisplay==="Overdue"?"var(--red)":"var(--text3)",whiteSpace:"nowrap"}}>{v.dueDate||""}</td>
                     <td style={{padding:"9px 12px"}}>
                       <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
-                        {canApprove && v.status==="Submitted" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Approve</Btn>}
-                        {canApprove && v.status==="Submitted" && <Btn size="sm" variant="danger" onClick={()=>updateStatus(v.id,"Rejected")}>Reject</Btn>}
+                        {canApprove && normalizeCaseStatus(v.status)==="Open" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Investigate</Btn>}
                         {canApprove && v.status==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Closed")}>Close</Btn>}
                         <Btn size="sm" ghost onClick={()=>{setEditId(v.id);setPage("viewcase")}}>View</Btn>
+                        {canDeleteCase && <Btn size="sm" variant="danger" onClick={()=>deleteCase(v.id)} icon={<Icon name="trash" size={12}/>}>Delete</Btn>}
                       </div>
                     </td>
                   </tr>
@@ -1240,6 +1321,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const employees = users
     .filter(isCaseEmployeeUser)
     .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const canManageCaseStatus = isEdit && ["Master Admin","HOD","Management"].includes(user.role);
 
   const set = (k, v) => setForm(f=>({...f,[k]:v}));
 
@@ -1308,7 +1390,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
         const caseNo = DB.nextSeq("VMS");
         const id = `VMS-${new Date().getFullYear()}-${String(caseNo).padStart(4,"0")}`;
         const newCase = { id, caseNo, ...cleanForm, evidence,
-          status: isDraft ? "Draft" : "Submitted",
+          status: isDraft ? "Draft" : "Open",
           createdBy: user.id, createdAt: Date.now(),
           capaActions:[], fiveWhy:[], auditLog:[{action:"Case Created",by:user.name,at:Date.now()}]
         };
@@ -1330,6 +1412,20 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     }, 600);
   };
 
+  const changeEditStatus = (status) => {
+    if (!canManageCaseStatus) return;
+    const normalized = normalizeCaseStatus(status);
+    const violations = DB.get("violations",[]);
+    const idx = violations.findIndex(v=>v.id===editId);
+    if (idx < 0) { toast("Case not found", "error"); return; }
+    const auditLog = [...(violations[idx].auditLog || []), { action:`Status changed to ${caseStatusLabel(normalized)}`, by:user.name, at:Date.now() }];
+    violations[idx] = { ...violations[idx], status: normalized, auditLog, updatedBy:user.name, updatedAt:Date.now() };
+    DB.set("violations", violations);
+    setForm(f=>({...f,status:normalized,auditLog}));
+    toast(`Case status changed to ${caseStatusLabel(normalized)}`, "success");
+    if (normalized === "Closed") notifyCaseEvent("Closed", violations[idx]);
+  };
+
   const toggleProductGroup = (g) => {
     const cur = form.productGroups || [];
     set("productGroups", cur.includes(g) ? cur.filter(x=>x!==g) : [...cur, g]);
@@ -1340,6 +1436,15 @@ function CaseFormPage({ user, toast, setPage, editId }) {
       <PageHeader title={isEdit?"Edit Case":"Register New Violation"} sub={isEdit?`Editing ${editId}`:"Fields marked * are mandatory  Case ID auto-generated on submission"}
         actions={
           <>
+            {canManageCaseStatus && (
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center",maxWidth:680}}>
+                {CASE_STATUS_OPTIONS.map(s=>(
+                  <Btn key={s.value} size="sm" variant={normalizeCaseStatus(form.status)===s.value?"primary":s.value==="Closed"?"success":s.value==="Overdue"?"danger":"default"}
+                    onClick={()=>changeEditStatus(s.value)}
+                  >{s.label}</Btn>
+                ))}
+              </div>
+            )}
             <Btn size="sm" onClick={()=>setPage("cases")}>Cancel</Btn>
             {!isEdit && <Btn size="sm" onClick={()=>submit(true)} loading={saving}>Save Draft</Btn>}
             <Btn variant="primary" size="sm" onClick={()=>submit(false)} loading={saving}>{isEdit?"Save Changes":"Submit for Approval"}</Btn>
@@ -1580,15 +1685,15 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   };
 
   const changeStatus = (status) => {
-    const log = violation.auditLog||[];
-    log.push({action:`Status changed to ${status}`,by:user.name,at:Date.now()});
-    updateCase({status, auditLog:log});
-    if(status==="Verification Pending") toast("Case moved to Verification Pending","success");
-    if(status==="Closed") {
+    const normalized = normalizeCaseStatus(status);
+    const log = [...(violation.auditLog||[]), {action:`Status changed to ${caseStatusLabel(normalized)}`,by:user.name,at:Date.now()}];
+    updateCase({status: normalized, auditLog:log});
+    if(normalized==="Closed") {
       toast("Case closed successfully","success");
-      notifyCaseEvent("Closed", {...violation, status});
+      notifyCaseEvent("Closed", {...violation, status: normalized});
+    } else {
+      toast(`Case status changed to ${caseStatusLabel(normalized)}`,"success");
     }
-    if(status==="CAPA Pending") toast("Case moved to CAPA Pending","success");
   };
 
   const selectCapaOwner = (ownerId) => {
@@ -1616,10 +1721,15 @@ function ViewCasePage({ user, toast, setPage, editId }) {
         actions={
           <>
             <Btn size="sm" onClick={()=>setPage("cases")}> Back</Btn>
-            {canEdit && violation.status==="Submitted" && <Btn size="sm" variant="success" onClick={()=>changeStatus("Under Investigation")}>Approve  Investigate</Btn>}
-            {canEdit && violation.status==="Under Investigation" && <Btn size="sm" variant="primary" onClick={()=>changeStatus("CAPA Pending")}>Move to CAPA</Btn>}
-            {canEdit && violation.status==="CAPA Pending" && <Btn size="sm" variant="primary" onClick={()=>changeStatus("Verification Pending")}>Submit for Verification</Btn>}
-            {canEdit && violation.status==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>changeStatus("Closed")}>Close Case</Btn>}
+            {canEdit && (
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                {CASE_STATUS_OPTIONS.map(s=>(
+                  <Btn key={s.value} size="sm" variant={effectiveCaseStatus(violation)===s.value?"primary":s.value==="Closed"?"success":s.value==="Overdue"?"danger":"default"}
+                    onClick={()=>changeStatus(s.value)}
+                  >{s.label}</Btn>
+                ))}
+              </div>
+            )}
             {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
           </>
         }
@@ -1632,7 +1742,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
             <CardHeader title="Case Details"
               actions={<>
                 <Badge severity={violation.severity}/>
-                <Badge status={violation.status}/>
+                <Badge status={effectiveCaseStatus(violation)}/>
                 {violation.repeatViolation && <span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"2px 8px",borderRadius:10,fontWeight:600}}> Repeat</span>}
               </>}
             />
@@ -1801,7 +1911,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 // INVESTIGATION PAGE
 // ============================================================
 function InvestigationPage({ user, toast, setPage, setEditId }) {
-  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Under Investigation","CAPA Pending","Verification Pending","Submitted"].includes(v.status)));
+  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Open","Submitted","Under Investigation","CAPA Pending","Overdue","Verification Pending"].includes(v.status)));
 
   return (
     <div>
@@ -2057,7 +2167,7 @@ function ReportsPage({ user, toast }) {
 
   const downloadTemplate = () => {
     const wb = XLSX.utils.book_new();
-    const rows=[["PVMS Import Template  Fill and upload"],[""],["Case ID (leave blank)","Date (YYYY-MM-DD)","Department","Employee Name","Employee Code","Designation","Category","Severity","Description","SOP Violated","Root Cause","Immediate Action","Risk Score (1-10)","Repeat (Yes/No)","Status"],...Array(5).fill(["","","","","","","","Minor","","","","","","No","Submitted"])];
+    const rows=[["PVMS Import Template  Fill and upload"],[""],["Case ID (leave blank)","Date (YYYY-MM-DD)","Department","Employee Name","Employee Code","Designation","Category","Severity","Description","SOP Violated","Root Cause","Immediate Action","Risk Score (1-10)","Repeat (Yes/No)","Status"],...Array(5).fill(["","","","","","","","Minor","","","","","","No","Open"])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Import Template");
     XLSX.writeFile(wb, "PVMS_Import_Template.xlsx");
     toast("Import template downloaded","success");
@@ -2459,7 +2569,7 @@ function EmailIntegrationPage({ user, toast }) {
     category:"Process Non-Adherence",
     severity:"Major",
     priority:"Major",
-    status:"Submitted",
+    status:"Open",
     incidentDate:"03 Jun 2026",
     dueDate:"07 Jun 2026",
     closureDate:"10 Jun 2026",
@@ -2471,7 +2581,11 @@ function EmailIntegrationPage({ user, toast }) {
     openCount:"12",
     pendingCount:"4",
     overdueCount:"1",
-    closedCount:"18"
+    closedCount:"18",
+    email:"amit.sharma@example.com",
+    temporaryPassword:"password123",
+    resetRequestedBy:"Master Admin",
+    resetTime:"03 Jun 2026, 10:45 am"
   };
 
   const current = templates.find(t => t.id === selected) || templates[0] || DEFAULT_EMAIL_TEMPLATES[0];
@@ -2522,6 +2636,7 @@ function EmailIntegrationPage({ user, toast }) {
   const automationRules = [
     { event:"New case registered", template:"New Case Registered", to:"Employee", cc:"HOD, Management" },
     { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
+    { event:"Password reset", template:"Password Reset", to:"User", cc:"None" },
     { event:"Due reminder", template:"Due Date Reminder", to:"Owner", cc:"Escalation chain" },
     { event:"Overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
   ];
@@ -2624,6 +2739,7 @@ function UsersPage({ user, toast }) {
   const [form, setForm]         = useState({ name:"", email:"", empCode:"", dept:"", role:"User/Employee", designation:"", active:true });
   const [search, setSearch]     = useState("");
   const [saving, setSaving]     = useState(false);
+  const [resettingUserId, setResettingUserId] = useState(null);
 
   // Permission matrix  stored in DB so Master Admin can edit
   const DEFAULT_MATRIX = [
@@ -2699,6 +2815,19 @@ function UsersPage({ user, toast }) {
     const arr = DB.get("users",[]).map(u=>u.id===uid?{...u,active:!u.active}:u);
     DB.set("users",arr); setUsers([...arr]);
     toast("User status updated","success");
+  };
+
+  const sendResetEmail = async (targetUser) => {
+    if (!targetUser?.email) { toast("User email missing", "error"); return; }
+    setResettingUserId(targetUser.id);
+    try {
+      await requestPasswordResetEmail(targetUser.email, user.name || "Master Admin");
+      toast(`Password reset email sent to ${targetUser.email}`, "success");
+    } catch (err) {
+      toast(err.message || "Password reset email failed", "error");
+    } finally {
+      setResettingUserId(null);
+    }
   };
 
   //  Matrix editing 
@@ -2883,7 +3012,7 @@ function UsersPage({ user, toast }) {
                         <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
                           <Btn size="sm" onClick={()=>openEdit(u)} icon={<Icon name="edit" size={12}/>}>Edit</Btn>
                           <Btn size="sm" ghost onClick={()=>toggleActive(u.id)}>{u.active!==false?"Disable":"Enable"}</Btn>
-                          {u.id!=="u1" && <Btn size="sm" ghost onClick={()=>toast(`Reset link sent to ${u.email}`,"success")} icon={<Icon name="lock" size={12}/>}>Pwd</Btn>}
+                          {u.id!=="u1" && <Btn size="sm" ghost onClick={()=>sendResetEmail(u)} loading={resettingUserId===u.id} icon={<Icon name="lock" size={12}/>}>Pwd</Btn>}
                           {u.id!=="u1" && <Btn size="sm" variant="danger" onClick={()=>{setDelUser(u.id);setShowForm(false);}} icon={<Icon name="trash" size={12} color="#fff"/>}>Delete</Btn>}
                         </div>
                       )}
