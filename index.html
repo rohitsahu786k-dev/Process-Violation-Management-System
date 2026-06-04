@@ -310,6 +310,34 @@ async function requestPasswordResetEmail(email, requestedBy = "Self Service") {
   return data;
 }
 
+async function completePasswordReset({ email, token, password }) {
+  const res = await fetch("/api/email/complete-password-reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, token, password })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Password reset failed");
+  return data;
+}
+
+async function requestUserInviteEmail(targetUser, requestedBy = "PVMS Admin", temporaryPassword) {
+  const res = await fetch("/api/email/user-invite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: targetUser.email,
+      user: targetUser,
+      temporaryPassword,
+      requestedBy,
+      portalUrl: getPortalUrl()
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "User invite email failed");
+  return data;
+}
+
 // ============================================================
 // CONSTANTS & CONFIG
 // ============================================================
@@ -423,7 +451,13 @@ const DEFAULT_EMAIL_TEMPLATES = [
     id:"passwordReset",
     name:"Password Reset",
     subject:"PVMS Password Reset Instructions",
-    body:"Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nTemporary Password: {{temporaryPassword}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\nPVMS Portal: {{portalUrl}}\n\nPlease sign in using the temporary password above.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{userName}},\n\nA password reset was requested for your PVMS account.\n\nLogin Email: {{email}}\nRequested By: {{resetRequestedBy}}\nRequested At: {{resetTime}}\nReset Link: {{resetLink}}\nPVMS Portal: {{portalUrl}}\n\nPlease open the reset link above and create a new password. This link will expire in 60 minutes.\n\nIf this request was not initiated by you, please contact the PVMS Administrator immediately.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"userInvite",
+    name:"New User Welcome",
+    subject:"Welcome to ONEPWS Process Violation Management System (PVMS Portal)",
+    body:"Dear {{userName}},\n\nWelcome to ONEPWS's online Process Violation Management System (PVMS Portal).\n\nYour account has been successfully created by Admin. Please login to the portal using below mentioned credentials:\n\nPVMS Portal: {{portalUrl}}\nLogin Email: {{email}}\nLogin Password: {{temporaryPassword}}\nAccount Created By: {{resetRequestedBy}}\nAccount Created On: {{resetTime}}\n\nPlease log in using the above credentials and explore the portal for further actions.\n\nFor any support or queries, kindly contact the PVMS Administrator.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   }
 ];
 
@@ -438,7 +472,16 @@ function insertBeforeRegards(body, line) {
 
 function ensureRequiredEmailTemplateContent(template) {
   const caseDescriptionTemplates = ["caseRegistered", "caseClosed", "due", "escalation", "summary"];
+  const defaultTemplate = DEFAULT_EMAIL_TEMPLATES.find(t => t.id === template.id);
   let body = String(template.body || "");
+
+  if (template.id === "passwordReset" && !body.includes("{{resetLink}}") && defaultTemplate) {
+    return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
+  }
+
+  if (template.id === "userInvite" && !body.includes("{{temporaryPassword}}") && defaultTemplate) {
+    return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
+  }
 
   if (caseDescriptionTemplates.includes(template.id) && !body.includes("{{caseDescription}}")) {
     const line = template.id === "summary"
@@ -471,7 +514,7 @@ const EMAIL_TEMPLATE_VARIABLES = [
   "employeeName","userName","violationId","department","category","severity","status",
   "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
   "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount",
-  "email","temporaryPassword","resetRequestedBy","resetTime","caseDescription","portalUrl"
+  "email","temporaryPassword","resetRequestedBy","resetTime","resetLink","caseDescription","portalUrl"
 ];
 
 // ============================================================
@@ -538,6 +581,13 @@ async function syncStateFromServer() {
 function passwordCandidatesForUser(user) {
   const fallback = user?.role === "Master Admin" ? "admin123" : "password123";
   return optionsWithCurrent([user?.password, user?.temporaryPassword, user?.tempPassword, fallback], "");
+}
+
+function generatePortalPassword() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  let value = "PVMS-";
+  for (let i = 0; i < 8; i++) value += chars[Math.floor(Math.random() * chars.length)];
+  return value;
 }
 
 function isCaseEmployeeUser(user) {
@@ -831,7 +881,7 @@ function ToastContainer({ toasts, dismiss }) {
 // ============================================================
 // LOGIN PAGE
 // ============================================================
-function LoginPage({ onLogin }) {
+function LoginPage({ onLogin, resetToken="", resetEmail="", onResetComplete=()=>{} }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
@@ -839,6 +889,15 @@ function LoginPage({ onLogin }) {
   const [resetLoading, setResetLoading] = useState(false);
   const [error, setError] = useState("");
   const [resetMessage, setResetMessage] = useState("");
+  const [resetEmailInput, setResetEmailInput] = useState(resetEmail || "");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetComplete, setResetComplete] = useState(false);
+
+  useEffect(() => {
+    setResetEmailInput(resetEmail || "");
+  }, [resetEmail]);
+
   const handle = async () => {
     setError(""); setResetMessage(""); setLoading(true);
     try {
@@ -880,6 +939,63 @@ function LoginPage({ onLogin }) {
       setResetLoading(false);
     }
   };
+
+  const submitNewPassword = async () => {
+    setError(""); setResetMessage("");
+    const cleanEmail = resetEmailInput.trim().toLowerCase();
+    if (!cleanEmail) { setError("Enter your email address."); return; }
+    if (newPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (newPassword !== confirmPassword) { setError("New password and confirm password do not match."); return; }
+    setResetLoading(true);
+    try {
+      await completePasswordReset({ email:cleanEmail, token:resetToken, password:newPassword });
+      await syncStateFromServer().catch(err => console.warn("Post-reset sync skipped:", err));
+      setResetComplete(true);
+      setResetMessage("Password reset successfully. Please sign in with your new password.");
+      setNewPassword(""); setConfirmPassword("");
+    } catch (err) {
+      setError(err.message || "Unable to reset password.");
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  if (resetToken) {
+    return (
+      <div style={{minHeight:"100vh",background:"#F9FAFB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
+        <div style={{width:"100%",maxWidth:420}}>
+          <div style={{textAlign:"center",marginBottom:28}}>
+            <img src={LOGO_DARK_SRC} alt="ONEPWS Logo" style={{width:"100%",maxWidth:280,height:"auto",marginBottom:14}}/>
+            <p style={{fontSize:13,color:"#374151",marginTop:4,fontWeight:500}}>Process Violation Management System</p>
+            <p style={{fontSize:10.5,color:"#6B7280",marginTop:3,letterSpacing:".03em"}}>{ISO_CERTS}</p>
+          </div>
+          <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:14,boxShadow:"0 4px 24px rgba(0,0,0,0.08)",padding:32}}>
+            <h2 style={{fontSize:16,fontWeight:600,color:"#1F2937",marginBottom:20}}>Reset your password</h2>
+            {error && <div style={{background:"var(--red-bg)",border:"1px solid var(--red-bd)",borderRadius:"var(--r)",padding:"8px 12px",color:"var(--red)",fontSize:13,marginBottom:16}}>{error}</div>}
+            {resetMessage && <div style={{background:"var(--green-bg)",border:"1px solid var(--green-bd)",borderRadius:"var(--r)",padding:"8px 12px",color:"var(--green)",fontSize:13,marginBottom:16}}>{resetMessage}</div>}
+            {resetComplete ? (
+              <Btn variant="primary" onClick={onResetComplete} style={{width:"100%",justifyContent:"center",padding:"9px 0",fontSize:14}}>Back to Sign In</Btn>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                <FormGroup label="Email Address" required>
+                  <Input type="email" value={resetEmailInput} onChange={setResetEmailInput} placeholder="your@email.com"/>
+                </FormGroup>
+                <FormGroup label="New Password" required>
+                  <Input type="password" value={newPassword} onChange={setNewPassword} placeholder="Minimum 8 characters"/>
+                </FormGroup>
+                <FormGroup label="Confirm Password" required>
+                  <Input type="password" value={confirmPassword} onChange={setConfirmPassword} placeholder="Re-enter new password"/>
+                </FormGroup>
+                <Btn variant="primary" onClick={submitNewPassword} loading={resetLoading} style={{width:"100%",justifyContent:"center",padding:"9px 0",fontSize:14}}>Reset Password</Btn>
+                <button onClick={onResetComplete} style={{background:"transparent",border:"none",color:"var(--text3)",fontSize:12,fontWeight:600,cursor:"pointer",padding:0}}>Back to sign in</button>
+              </div>
+            )}
+          </div>
+          <p style={{textAlign:"center",color:"#6B7280",fontSize:11,marginTop:16}}>{ISO_CERTS}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{minHeight:"100vh",background:"#F9FAFB",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -2088,9 +2204,12 @@ function InvestigationPage({ user, toast, setPage, setEditId }) {
 // ============================================================
 function DisciplinaryPage({ user, toast }) {
   const violations = DB.get("violations",[]);
-  const employees = employeeComplianceUsers(DB.get("users",[]), violations).filter(u=>u.role==="User/Employee");
+  const allUsers = DB.get("users",[]);
+  const caseViolations = violations.filter(isComplianceScoredCase);
+  const caseEmployeeIds = new Set(caseViolations.map(v => findCaseEmployee(v, allUsers)?.id).filter(Boolean));
+  const employees = employeeComplianceUsers(allUsers, caseViolations).filter(u=>u.role==="User/Employee" && caseEmployeeIds.has(u.id));
 
-  const getHistory = (empId) => violations.filter(v=>v.empId===empId);
+  const getHistory = (empId) => caseViolations.filter(v=>findCaseEmployee(v, allUsers)?.id===empId);
 
   return (
     <div>
@@ -2134,9 +2253,12 @@ function DisciplinaryPage({ user, toast }) {
               </tr>
             </thead>
             <tbody>
+              {employees.length === 0 && (
+                <tr><td colSpan={6}><EmptyState icon="inbox" title="No disciplinary records" sub="Employees will appear here after a case is registered"/></td></tr>
+              )}
               {employees.sort((a,b)=>a.complianceScore-b.complianceScore).map(emp=>{
                 const hist = getHistory(emp.id);
-                const warnings = DB.get("warnings",[]).filter(w=>w.empId===emp.id);
+                const warnings = DB.get("warnings",[]).filter(w=>w.empId===emp.id && (!w.caseId || caseViolations.some(v=>v.id===w.caseId)));
                 const lastSev = hist.length ? hist[hist.length-1].severity : null;
                 const suggested = lastSev ? DISCIPLINARY_MATRIX[lastSev]?.[Math.min(hist.length-1,3)] : "";
                 return (
@@ -2727,6 +2849,7 @@ function EmailIntegrationPage({ user, toast }) {
     temporaryPassword:"PVMS-A7K9Q2LM",
     resetRequestedBy:"Master Admin",
     resetTime:"03 Jun 2026, 10:45 am",
+    resetLink:`${getPortalUrl()}?resetToken=sample-token&email=amit.sharma%40example.com`,
     caseDescription:"Operator bypassed the approved process checklist before dispatch approval.",
     portalUrl:getPortalUrl()
   };
@@ -2779,7 +2902,8 @@ function EmailIntegrationPage({ user, toast }) {
   const automationRules = [
     { event:"New case registered", template:"New Case Registered", to:"Employee", cc:"HOD, Management" },
     { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
-    { event:"Password reset", template:"Password Reset", to:"User", cc:"Default management CC" },
+    { event:"New user created", template:"New User Welcome", to:"User", cc:"Admin copy" },
+    { event:"Password reset", template:"Password Reset", to:"User", cc:"Admin copy" },
     { event:"Due reminder", template:"Due Date Reminder", to:"Owner", cc:"Escalation chain" },
     { event:"Overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
   ];
@@ -2925,26 +3049,43 @@ function UsersPage({ user, toast }) {
   const saveUser = () => {
     if (!form.name || !form.email) { toast("Name and email required","error"); return; }
     setSaving(true);
-    setTimeout(()=>{
-      const arr = DB.get("users",[]);
-      const normalizedEmail = form.email.trim().toLowerCase();
-      const cleanForm = { ...form, name:form.name.trim(), email:normalizedEmail };
-      const duplicate = arr.some(x => (x.email || "").toLowerCase() === normalizedEmail && (!editUser || x.id !== editUser.id));
-      if (duplicate) { toast("Email already exists","error"); setSaving(false); return; }
-      if (editUser) {
-        const idx = arr.findIndex(x=>x.id===editUser.id);
-        if (idx<0) { toast("User record not found","error"); setSaving(false); return; }
-        arr[idx] = {...arr[idx],...cleanForm, updatedAt:Date.now()};
-        toast(`User ${form.name} updated`,"success");
-      } else {
-        arr.push({id:"u"+Date.now(),...cleanForm,complianceScore:100,violations:0,createdAt:Date.now()});
-        toast(`User ${form.name} created`,"success");
+    setTimeout(async ()=>{
+      try {
+        const arr = DB.get("users",[]);
+        const normalizedEmail = form.email.trim().toLowerCase();
+        const cleanForm = { ...form, name:form.name.trim(), email:normalizedEmail };
+        const duplicate = arr.some(x => (x.email || "").toLowerCase() === normalizedEmail && (!editUser || x.id !== editUser.id));
+        if (duplicate) { toast("Email already exists","error"); return; }
+        let createdUser = null;
+        let initialPassword = "";
+        if (editUser) {
+          const idx = arr.findIndex(x=>x.id===editUser.id);
+          if (idx<0) { toast("User record not found","error"); return; }
+          arr[idx] = {...arr[idx],...cleanForm, updatedAt:Date.now()};
+        } else {
+          initialPassword = generatePortalPassword();
+          createdUser = {id:"u"+Date.now(),...cleanForm,password:initialPassword,mustChangePassword:true,passwordUpdatedAt:Date.now(),complianceScore:100,violations:0,createdAt:Date.now()};
+          arr.push(createdUser);
+        }
+        const syncedUsers = syncComplianceScores(arr, DB.get("violations",[]), true);
+        setUsers([...syncedUsers]);
+        setShowForm(false); setEditUser(null);
+        setForm({name:"",email:"",empCode:"",dept:"",role:"User/Employee",designation:"",active:true});
+        if (createdUser) {
+          try {
+            await requestUserInviteEmail(createdUser, user.name || "Master Admin", initialPassword);
+            toast(`User ${createdUser.name} created and invite email sent`,"success");
+          } catch (inviteErr) {
+            toast(`User ${createdUser.name} created, but invite email failed`,"warning");
+          }
+        } else {
+          toast(`User ${form.name} updated`,"success");
+        }
+      } catch (err) {
+        toast(err.message || "Unable to save user","error");
+      } finally {
+        setSaving(false);
       }
-      const syncedUsers = syncComplianceScores(arr, DB.get("violations",[]), true);
-      setUsers([...syncedUsers]);
-      setShowForm(false); setEditUser(null);
-      setForm({name:"",email:"",empCode:"",dept:"",role:"User/Employee",designation:"",active:true});
-      setSaving(false);
     },400);
   };
 
@@ -2968,7 +3109,7 @@ function UsersPage({ user, toast }) {
     setResettingUserId(targetUser.id);
     try {
       await requestPasswordResetEmail(targetUser.email, user.name || "Master Admin");
-      toast(`Password reset email sent to ${targetUser.email}`, "success");
+      toast(`Password reset link sent to ${targetUser.email}`, "success");
     } catch (err) {
       toast(err.message || "Password reset email failed", "error");
     } finally {
@@ -3021,12 +3162,14 @@ function UsersPage({ user, toast }) {
       const rows = XLSX.utils.sheet_to_json(sheet, { defval:"" });
       const current = DB.get("users", []);
       let added = 0, updated = 0;
+      const inviteTargets = [];
       rows.forEach((row, index) => {
         const email = String(row.EmailID || "").trim().toLowerCase();
         const name = String(row.SPOCName || "").trim();
         if (!email || !name) return;
         const existingIndex = current.findIndex(u => (u.email || "").toLowerCase() === email);
         const existingUser = existingIndex >= 0 ? current[existingIndex] : null;
+        const initialPassword = existingUser ? existingUser.password : generatePortalPassword();
         const record = {
           name,
           email,
@@ -3039,6 +3182,9 @@ function UsersPage({ user, toast }) {
           hodBuhEmail: String(row.HODBUHEmail || "").trim(),
           managementEmail: String(row.ManagementEmail || "").trim(),
           empCode: existingUser ? existingUser.empCode : `EMP-${String(Date.now() + index).slice(-6)}`,
+          password: initialPassword,
+          mustChangePassword: existingUser ? !!existingUser.mustChangePassword : true,
+          passwordUpdatedAt: existingUser ? existingUser.passwordUpdatedAt : Date.now(),
           complianceScore: existingUser ? existingUser.complianceScore : 100,
           violations: existingUser ? existingUser.violations : 0,
         };
@@ -3046,13 +3192,22 @@ function UsersPage({ user, toast }) {
           current[existingIndex] = { ...current[existingIndex], ...record };
           updated++;
         } else {
-          current.push({ id:"u" + Date.now() + index, ...record });
+          const newUser = { id:"u" + Date.now() + index, ...record };
+          current.push(newUser);
+          inviteTargets.push({ user:newUser, password:initialPassword });
           added++;
         }
       });
       const syncedUsers = syncComplianceScores(current, DB.get("violations",[]), true);
       setUsers([...syncedUsers]);
-      toast(`Employee import complete: ${added} added, ${updated} updated`, "success");
+      if (inviteTargets.length) {
+        const results = await Promise.allSettled(inviteTargets.map(item => requestUserInviteEmail(item.user, user.name || "Master Admin", item.password)));
+        const sent = results.filter(r => r.status === "fulfilled").length;
+        const failed = results.length - sent;
+        toast(`Employee import complete: ${added} added, ${updated} updated, ${sent} invite(s) sent${failed ? `, ${failed} failed` : ""}`, failed ? "warning" : "success");
+      } else {
+        toast(`Employee import complete: ${added} added, ${updated} updated`, "success");
+      }
     } catch (err) {
       toast("Unable to import employee file", "error");
     } finally {
@@ -3908,12 +4063,15 @@ function MediaLibraryPage({ user, toast }) {
 // MAIN APP
 // ============================================================
 function App() {
+  const resetParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
   const [dbLoaded, setDbLoaded] = useState(false);
   const [user, setUser] = useState(() => DB.get("currentUser", null));
   const [page, setPage] = useState("dashboard");
   const [editId, setEditId] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [resetToken, setResetToken] = useState(() => resetParams.get("resetToken") || "");
+  const [resetEmail, setResetEmail] = useState(() => resetParams.get("email") || "");
 
   useEffect(() => {
     syncStateFromServer().then(() => {
@@ -3954,7 +4112,26 @@ function App() {
     if (window.confirm("Sign out of PVMS?")) { setUser(null); DB.set("currentUser", null); }
   };
 
+  const clearResetLink = useCallback(() => {
+    if (typeof window !== "undefined" && window.history?.replaceState) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("resetToken");
+      url.searchParams.delete("email");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    setResetToken("");
+    setResetEmail("");
+    setUser(null);
+  }, []);
+
   if (!dbLoaded) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><div className="spinner dark"></div></div>;
+
+  if (resetToken) return (
+    <>
+      <LoginPage onLogin={setUser} resetToken={resetToken} resetEmail={resetEmail} onResetComplete={clearResetLink}/>
+      <ToastContainer toasts={toasts} dismiss={dismissToast}/>
+    </>
+  );
 
   if (!user) return (
     <>

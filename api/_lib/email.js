@@ -65,11 +65,19 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function linkifyHtml(value) {
+  return String(value || "").replace(/https?:\/\/[^\s<]+/g, (url) => {
+    const cleanUrl = url.replace(/[),.;]+$/, "");
+    const suffix = url.slice(cleanUrl.length);
+    return `<a href="${cleanUrl}" target="_blank" rel="noopener" style="color:#E31E24;text-decoration:none">${cleanUrl}</a>${suffix}`;
+  });
+}
+
 function bodyToHtml(body) {
   return String(body || "")
     .split(/\n{2,}/)
     .map(block => {
-      const html = escapeHtml(block).replace(/\n/g, "<br>");
+      const html = linkifyHtml(escapeHtml(block)).replace(/\n/g, "<br>");
       return `<p style="margin:0 0 14px;line-height:1.65;color:#374151;font-size:14px">${html}</p>`;
     })
     .join("");
