@@ -549,6 +549,49 @@ function employeeOptionLabel(user) {
   return detail ? `${user.name} (${detail})` : user.name;
 }
 
+const COMPLIANCE_ROLES = ["User/Employee", "Process Dept Rep"];
+
+function isComplianceUser(user) {
+  return user && COMPLIANCE_ROLES.includes(user.role);
+}
+
+function isComplianceScoredCase(violation) {
+  const status = normalizeCaseStatus(violation?.status);
+  return violation && !["Draft", "Rejected", "Archived"].includes(status);
+}
+
+function withComplianceScores(users = [], violations = []) {
+  const stats = new Map((users || []).filter(isComplianceUser).map(u => [u.id, { count:0, penalty:0 }]));
+  (violations || []).filter(isComplianceScoredCase).forEach(violation => {
+    const employee = findCaseEmployee(violation, users || []);
+    if (!employee || !stats.has(employee.id)) return;
+    const stat = stats.get(employee.id);
+    stat.count += 1;
+    stat.penalty += Math.abs(SEVERITY_CONFIG[violation.severity]?.score || 0);
+  });
+
+  return (users || []).map(user => {
+    if (!isComplianceUser(user)) return user;
+    const stat = stats.get(user.id) || { count:0, penalty:0 };
+    const score = Math.max(0, 100 - stat.penalty);
+    const currentScore = Number.isFinite(Number(user.complianceScore)) ? Number(user.complianceScore) : 100;
+    const currentCount = Number.isFinite(Number(user.violations)) ? Number(user.violations) : 0;
+    if (currentScore === score && currentCount === stat.count) return user;
+    return { ...user, complianceScore:score, violations:stat.count };
+  });
+}
+
+function employeeComplianceUsers(users = DB.get("users", []), violations = DB.get("violations", [])) {
+  return withComplianceScores(users, violations).filter(isComplianceUser);
+}
+
+function syncComplianceScores(users = DB.get("users", []), violations = DB.get("violations", []), force = false) {
+  const nextUsers = withComplianceScores(users, violations);
+  const changed = nextUsers.some((next, index) => next !== users[index]);
+  if (force || changed) DB.set("users", nextUsers);
+  return nextUsers;
+}
+
 // ============================================================
 // SEED DATA
 // ============================================================
@@ -802,6 +845,7 @@ function LoginPage({ onLogin }) {
       await syncStateFromServer().catch(err => console.warn("Login sync skipped:", err));
       // Always seed before login so users table is populated
       seedIfEmpty();
+      syncComplianceScores();
       const users = DB.get("users", []);
       const user = users.find(u => (u.email || "").toLowerCase() === email.trim().toLowerCase());
 
@@ -1033,7 +1077,7 @@ const var_r2 = "var(--r2)";
 // ============================================================
 function DashboardPage({ user, setPage }) {
   const violations = DB.get("violations",[]);
-  const users = DB.get("users",[]);
+  const users = withComplianceScores(DB.get("users",[]), violations);
 
   const total = violations.length;
   const open = violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length;
@@ -1045,7 +1089,8 @@ function DashboardPage({ user, setPage }) {
   const critical = violations.filter(v=>v.severity==="Critical"&&v.status!=="Closed").length;
   const repeats = violations.filter(v=>v.repeatViolation).length;
   const capaPending = violations.filter(v=>v.status==="CAPA Pending"||v.status==="Verification Pending").length;
-  const avgScore = users.filter(u=>u.role==="User/Employee").reduce((a,b)=>a+b.complianceScore,0) / Math.max(users.filter(u=>u.role==="User/Employee").length,1);
+  const complianceUsers = users.filter(isComplianceUser);
+  const avgScore = complianceUsers.reduce((a,b)=>a+b.complianceScore,0) / Math.max(complianceUsers.length,1);
 
   const deptCounts = {};
   DEPARTMENTS.forEach(d=>{deptCounts[d]=violations.filter(v=>v.dept===d).length});
@@ -1263,6 +1308,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
       vs[idx].auditLog = vs[idx].auditLog || [];
       vs[idx].auditLog.push({ action:`Status changed to ${caseStatusLabel(nextStatus)}`, by:user.name, at:Date.now() });
       DB.set("violations", vs);
+      syncComplianceScores(DB.get("users",[]), vs);
       setViolations([...vs]);
       toast(`Case ${id} status updated to ${caseStatusLabel(nextStatus)}`, "success");
       if (nextStatus === "Closed") {
@@ -1278,6 +1324,8 @@ function CasesPage({ user, setPage, setEditId, toast }) {
     const target = vs.find(v=>v.id===id);
     const next = vs.filter(v=>v.id!==id);
     DB.set("violations", next);
+    DB.set("warnings", DB.get("warnings",[]).filter(w=>w.caseId!==id));
+    syncComplianceScores(DB.get("users",[]), next);
     setViolations([...next]);
     const logs = DB.get("auditLogs", []);
     logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"CASE_DELETED", entity:id, detail:`Deleted case for ${target?.empName || "unknown employee"}`, ip:"local" });
@@ -1454,12 +1502,12 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     setSaving(true);
     setTimeout(() => {
       const violations = DB.get("violations",[]);
-      const sevScore = SEVERITY_CONFIG[form.severity]?.score || 0;
       const cleanForm = { ...form, riskScore: form.riskScore ? Number(form.riskScore) : "" };
       if (isEdit) {
         const idx = violations.findIndex(v=>v.id===editId);
         violations[idx] = { ...violations[idx], ...cleanForm, evidence, updatedBy:user.name, updatedAt:Date.now() };
         DB.set("violations", violations);
+        syncComplianceScores(DB.get("users",[]), violations);
         toast(`Case ${editId} updated`, "success");
       } else {
         const caseNo = DB.nextSeq("VMS");
@@ -1471,12 +1519,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
         };
         violations.push(newCase);
         DB.set("violations", violations);
-        // update employee score
-        if (form.empId && !isDraft) {
-          const us = DB.get("users",[]);
-          const ui = us.findIndex(u=>u.id===form.empId);
-          if (ui>=0) { us[ui].complianceScore = Math.max(0, (us[ui].complianceScore||100)+sevScore); us[ui].violations=(us[ui].violations||0)+1; DB.set("users",us); }
-        }
+        syncComplianceScores(DB.get("users",[]), violations);
         toast(isDraft ? "Draft saved" : `Case ${id} submitted for review`, "success");
         if (!isDraft) {
           notifyCaseEvent("Registered", newCase);
@@ -1496,6 +1539,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     const auditLog = [...(violations[idx].auditLog || []), { action:`Status changed to ${caseStatusLabel(normalized)}`, by:user.name, at:Date.now() }];
     violations[idx] = { ...violations[idx], status: normalized, auditLog, updatedBy:user.name, updatedAt:Date.now() };
     DB.set("violations", violations);
+    syncComplianceScores(DB.get("users",[]), violations);
     setForm(f=>({...f,status:normalized,auditLog}));
     toast(`Case status changed to ${caseStatusLabel(normalized)}`, "success");
     if (normalized === "Closed") notifyCaseEvent("Closed", violations[idx]);
@@ -1740,6 +1784,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     if (idx>=0) {
       vs[idx] = {...vs[idx],...updates};
       DB.set("violations",vs);
+      syncComplianceScores(DB.get("users",[]), vs);
       setViolations([...vs]);
     }
   };
@@ -1812,6 +1857,8 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                   const vs = DB.get("violations",[]);
                   const next = vs.filter(v=>v.id!==violation.id);
                   DB.set("violations", next);
+                  DB.set("warnings", DB.get("warnings",[]).filter(w=>w.caseId!==violation.id));
+                  syncComplianceScores(DB.get("users",[]), next);
                   const logs = DB.get("auditLogs", []);
                   logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"CASE_DELETED", entity:violation.id, detail:`Deleted case for ${violation.empName || "unknown employee"}`, ip:"local" });
                   DB.set("auditLogs", logs);
@@ -2040,8 +2087,8 @@ function InvestigationPage({ user, toast, setPage, setEditId }) {
 // DISCIPLINARY PAGE
 // ============================================================
 function DisciplinaryPage({ user, toast }) {
-  const employees = DB.get("users",[]).filter(u=>u.role==="User/Employee");
   const violations = DB.get("violations",[]);
+  const employees = employeeComplianceUsers(DB.get("users",[]), violations).filter(u=>u.role==="User/Employee");
 
   const getHistory = (empId) => violations.filter(v=>v.empId===empId);
 
@@ -2222,7 +2269,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
 // ============================================================
 function ReportsPage({ user, toast }) {
   const violations = DB.get("violations",[]);
-  const users = DB.get("users",[]).filter(u=>u.role==="User/Employee");
+  const users = employeeComplianceUsers(DB.get("users",[]), violations);
 
   const deptStats = DEPARTMENTS.map(d=>{
     const vs = violations.filter(v=>v.dept===d);
@@ -2246,7 +2293,7 @@ function ReportsPage({ user, toast }) {
     const wb = XLSX.utils.book_new();
     const vRows=[["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","Repeat","Risk","Due Date","Description"],...violations.map(v=>[v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.repeatViolation?"Yes":"No",v.riskScore,v.dueDate,v.description])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(vRows), "All Cases");
-    const uRows=[["Name","Emp Code","Dept","Role","Score","Violations"],...DB.get("users",[]).map(u=>[u.name,u.empCode,u.dept,u.role,u.complianceScore,u.violations])];
+    const uRows=[["Name","Emp Code","Dept","Role","Score","Violations"],...withComplianceScores(DB.get("users",[]), violations).map(u=>[u.name,u.empCode,u.dept,u.role,u.complianceScore,u.violations])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(uRows), "Employees");
     const wRows=[["Letter ID","Date","Employee","Dept","Case Ref","Type","Severity"],...DB.get("warnings",[]).map(w=>[w.id,w.letterDate,w.empName,w.dept,w.caseId,w.letterType,w.severity])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wRows), "Warning Letters");
@@ -2345,9 +2392,14 @@ function ReportsPage({ user, toast }) {
 // EMPLOYEE COMPLIANCE PAGE
 // ============================================================
 function EmployeesPage({ user }) {
-  const [users] = useState(DB.get("users",[]).filter(u=>u.role==="User/Employee"||u.role==="Process Dept Rep"));
   const violations = DB.get("violations",[]);
   const warnings = DB.get("warnings",[]);
+  const allUsers = DB.get("users",[]);
+  const users = employeeComplianceUsers(allUsers, violations);
+
+  useEffect(() => {
+    syncComplianceScores(allUsers, violations);
+  }, []);
 
   const scoreColor = (s) => s > 85 ? "var(--green)" : s > 65 ? "#D97706" : "var(--red)";
   const scoreBg = (s) => s > 85 ? "var(--green-bg)" : s > 65 ? "var(--amber-bg)" : "var(--red-bg)";
@@ -2377,7 +2429,7 @@ function EmployeesPage({ user }) {
             <tbody>
               {[...users].sort((a,b)=>a.complianceScore-b.complianceScore).map((emp,i)=>{
                 const empViol = violations.filter(v=>v.empId===emp.id);
-                const empWarn = warnings.filter(w=>w.empId===emp.id);
+                const empWarn = warnings.filter(w=>w.empId===emp.id && (!w.caseId || violations.some(v=>v.id===w.caseId)));
                 return (
                   <tr key={emp.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
                     <td style={{padding:"10px 12px",fontSize:12,fontFamily:"var(--mono)",color:i<3?"var(--red)":"var(--text3)",fontWeight:i<3?700:400,display:"flex",alignItems:"center",gap:4}}>{i<3?<Icon name="star" size={14} color="#D97706"/>:null}{i+1}</td>
@@ -2888,7 +2940,8 @@ function UsersPage({ user, toast }) {
         arr.push({id:"u"+Date.now(),...cleanForm,complianceScore:100,violations:0,createdAt:Date.now()});
         toast(`User ${form.name} created`,"success");
       }
-      DB.set("users",arr); setUsers([...arr]);
+      const syncedUsers = syncComplianceScores(arr, DB.get("violations",[]), true);
+      setUsers([...syncedUsers]);
       setShowForm(false); setEditUser(null);
       setForm({name:"",email:"",empCode:"",dept:"",role:"User/Employee",designation:"",active:true});
       setSaving(false);
@@ -2898,13 +2951,15 @@ function UsersPage({ user, toast }) {
   const confirmDelete = (uid) => {
     if (uid==="u1") { toast("Cannot delete system administrator","error"); return; }
     const arr = DB.get("users",[]).filter(u=>u.id!==uid);
-    DB.set("users",arr); setUsers([...arr]); setDelUser(null);
+    const syncedUsers = syncComplianceScores(arr, DB.get("violations",[]), true);
+    setUsers([...syncedUsers]); setDelUser(null);
     toast("User deleted","success");
   };
 
   const toggleActive = (uid) => {
     const arr = DB.get("users",[]).map(u=>u.id===uid?{...u,active:!u.active}:u);
-    DB.set("users",arr); setUsers([...arr]);
+    const syncedUsers = syncComplianceScores(arr, DB.get("violations",[]), true);
+    setUsers([...syncedUsers]);
     toast("User status updated","success");
   };
 
@@ -2995,8 +3050,8 @@ function UsersPage({ user, toast }) {
           added++;
         }
       });
-      DB.set("users", current);
-      setUsers([...current]);
+      const syncedUsers = syncComplianceScores(current, DB.get("violations",[]), true);
+      setUsers([...syncedUsers]);
       toast(`Employee import complete: ${added} added, ${updated} updated`, "success");
     } catch (err) {
       toast("Unable to import employee file", "error");
@@ -3863,6 +3918,7 @@ function App() {
   useEffect(() => {
     syncStateFromServer().then(() => {
       seedIfEmpty();
+      syncComplianceScores();
       setNotifications(DB.get("notifications",[]) || []);
       // Re-read user from localStorage after sync in case user data was updated
       const syncedUser = DB.get("currentUser", null);
@@ -3871,6 +3927,7 @@ function App() {
     }).catch(err => {
       console.error("Failed to sync from DB", err);
       seedIfEmpty();
+      syncComplianceScores();
       setNotifications(DB.get("notifications",[]) || []);
       setDbLoaded(true);
     });

@@ -26,10 +26,22 @@ function generateTemporaryPassword() {
   return value;
 }
 
+const PVMS_TIME_ZONE = "Asia/Kolkata";
+
 function formatLocalTime(date) {
-  const pad = n => String(n).padStart(2, "0");
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const parts = new Intl.DateTimeFormat("en-IN", {
+    timeZone: PVMS_TIME_ZONE,
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${Number(parts.day)} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} IST`;
 }
 
 async function logEmail(entry) {
