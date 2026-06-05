@@ -210,6 +210,29 @@ function uniqueEmails(values) {
     .filter(Boolean))];
 }
 
+function publishNotifications(notifications) {
+  DB.set("notifications", notifications);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("pvms-notifications-updated", { detail: notifications }));
+  }
+}
+
+function pushAppNotification({ text, type="info", entityId="", page="" }) {
+  const current = DB.get("notifications", []) || [];
+  const notification = {
+    id:`nt-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+    text,
+    type,
+    entityId,
+    page,
+    read:false,
+    ts:Date.now()
+  };
+  const next = [notification, ...current].slice(0, 50);
+  publishNotifications(next);
+  return notification;
+}
+
 function activeRegisteredUsers(users) {
   return (users || [])
     .filter(u => u && u.active !== false && u.name)
@@ -243,6 +266,15 @@ function formatEmailDate(value) {
 
 async function notifyCaseEvent(eventType, violation) {
   try {
+    const isClosed = eventType === "Closed";
+    pushAppNotification({
+      text:isClosed
+        ? `Case ${violation.id} closed for ${violation.empName || "employee"}`
+        : `New case ${violation.id} registered for ${violation.empName || "employee"}`,
+      type:isClosed ? "success" : (violation.severity === "Critical" ? "critical" : "info"),
+      entityId:violation.id,
+      page:"viewcase"
+    });
     const users = DB.get("users", []);
     const emp = findCaseEmployee(violation, users);
     const hod = findCaseHod(violation, emp, users);
@@ -267,7 +299,6 @@ async function notifyCaseEvent(eventType, violation) {
       ...managementEmails,
     ]).filter(email => !to.includes(email));
 
-    const isClosed = eventType === "Closed";
     const template = getEmailTemplateById(isClosed ? "caseClosed" : "caseRegistered") || {
       subject: isClosed ? "PVMS Case Closed: {{violationId}}" : "New PVMS Case Registered: {{violationId}}",
       body: "Dear {{employeeName}},\n\nPVMS case {{violationId}} has been updated.\n\nRegards,\nPVMS Automation System"
@@ -664,7 +695,7 @@ function withComplianceScores(users = [], violations = []) {
     if (!employee || !stats.has(employee.id)) return;
     const stat = stats.get(employee.id);
     stat.count += 1;
-    stat.penalty += Math.abs(SEVERITY_CONFIG[violation.severity]?.score || 0);
+    stat.penalty += casePenalty(violation);
   });
 
   return (users || []).map(user => {
@@ -687,6 +718,17 @@ function syncComplianceScores(users = DB.get("users", []), violations = DB.get("
   const changed = nextUsers.some((next, index) => next !== users[index]);
   if (force || changed) DB.set("users", nextUsers);
   return nextUsers;
+}
+
+function casePenalty(violation) {
+  return Math.abs(SEVERITY_CONFIG[violation?.severity]?.score || 0);
+}
+
+function departmentComplianceScore(violations = []) {
+  const penalty = (violations || [])
+    .filter(isComplianceScoredCase)
+    .reduce((sum, violation) => sum + casePenalty(violation), 0);
+  return Math.max(0, 100 - penalty);
 }
 
 // ============================================================
@@ -1219,7 +1261,7 @@ function Sidebar({ active, setPage, user, notifCount }) {
 // ============================================================
 // TOPBAR
 // ============================================================
-function Topbar({ page, user, notifications, setPage, onLogout }) {
+function Topbar({ page, user, notifications, setPage, setEditId, onLogout, onNotificationsChange }) {
   const [showNotif, setShowNotif] = useState(false);
   const [notifs, setNotifs] = useState(notifications);
   const unread = notifs.filter(n=>!n.read).length;
@@ -1241,10 +1283,25 @@ function Topbar({ page, user, notifications, setPage, onLogout }) {
   };
   const bc = BREADCRUMBS[page] || [["PVMS","dashboard"]];
 
+  useEffect(() => {
+    setNotifs(notifications || []);
+  }, [notifications]);
+
   const markAll = () => {
     const updated = notifs.map(n=>({...n,read:true}));
     setNotifs(updated);
-    DB.set("notifications", updated);
+    publishNotifications(updated);
+    onNotificationsChange?.(updated);
+  };
+
+  const openNotification = (notification) => {
+    const updated = notifs.map(n=>n.id===notification.id ? {...n,read:true} : n);
+    setNotifs(updated);
+    publishNotifications(updated);
+    onNotificationsChange?.(updated);
+    if (notification.entityId) setEditId?.(notification.entityId);
+    if (notification.page) setPage(notification.page);
+    setShowNotif(false);
   };
 
   return (
@@ -1274,9 +1331,12 @@ function Topbar({ page, user, notifications, setPage, onLogout }) {
                 <span style={{fontWeight:600,fontSize:13}}>Notifications {unread>0&&<span style={{fontSize:11,background:"var(--red-bg)",color:"var(--red)",padding:"1px 5px",borderRadius:8}}>+{unread}</span>}</span>
                 <button onClick={markAll} style={{fontSize:11,color:"var(--blue)",background:"none",border:"none",cursor:"pointer"}}>Mark all read</button>
               </div>
+              {notifs.length === 0 && (
+                <div style={{padding:"18px 14px",fontSize:12,color:"var(--text3)",textAlign:"center"}}>No notifications</div>
+              )}
               {notifs.slice(0,6).map(n=>(
-                <div key={n.id} style={{padding:"10px 14px",borderBottom:"1px solid var(--line)",background:n.read?"var(--bg3)":"var(--blue-l)",display:"flex",gap:10,alignItems:"flex-start"}}>
-                  <span style={{fontSize:14,display:"flex"}}><Icon name={n.type==="critical"?"alert":n.type==="warning"?"alert-circle":n.type==="success"?"check-circle":"info"} size={16} color={n.type==="critical"?"var(--red)":n.type==="warning"?"#D97706":"var(--green)"}/></span>
+                <div key={n.id} onClick={()=>openNotification(n)} style={{padding:"10px 14px",borderBottom:"1px solid var(--line)",background:n.read?"var(--bg3)":"var(--blue-l)",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
+                  <span style={{fontSize:14,display:"flex"}}><Icon name={n.type==="critical"?"alert":n.type==="warning"?"alert-circle":n.type==="success"?"check-circle":"info"} size={16} color={n.type==="critical"?"var(--red)":n.type==="warning"?"#D97706":n.type==="success"?"var(--green)":"var(--blue)"}/></span>
                   <div><div style={{fontSize:12,color:"var(--text)",fontWeight:n.read?400:500}}>{n.text}</div><div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>{new Date(n.ts).toLocaleString("en-IN",{dateStyle:"short",timeStyle:"short"})}</div></div>
                 </div>
               ))}
@@ -2554,20 +2614,23 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
 // ============================================================
 function ReportsPage({ user, toast, setPage }) {
   const violations = DB.get("violations",[]);
-  const users = employeeComplianceUsers(DB.get("users",[]), violations);
+  const reportDepartments = [...new Set([
+    ...activeMasterOptions("masterDepts", DEPARTMENTS),
+    ...violations.map(v=>v.dept).filter(Boolean)
+  ])];
 
-  const deptStats = DEPARTMENTS.map(d=>{
+  const deptStats = reportDepartments.map(d=>{
     const vs = violations.filter(v=>v.dept===d);
     const closed = vs.filter(v=>v.status==="Closed").length;
     const open = vs.filter(v=>!["Closed","Rejected"].includes(v.status)).length;
     const ov = vs.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length;
-    const avgScore = users.filter(u=>u.dept===d).reduce((a,b)=>a+b.complianceScore,0)/Math.max(users.filter(u=>u.dept===d).length,1);
-    return { dept:d, total:vs.length, closed, open, overdue:ov, avgScore:Math.round(avgScore)||100 };
+    const deduction = vs.filter(isComplianceScoredCase).reduce((sum, violation) => sum + casePenalty(violation), 0);
+    return { dept:d, total:vs.length, closed, open, overdue:ov, deduction, score:departmentComplianceScore(vs) };
   });
 
   const exportMIS = () => {
     const wb = XLSX.utils.book_new();
-    const summary = [["PVMS Monthly MIS Report",COMPANY_NAME],[`Generated: ${new Date().toLocaleDateString("en-IN")}`,``],[""],["Department","Total","Open","Closed","Overdue","Avg Score"],...deptStats.map(d=>[d.dept,d.total,d.open,d.closed,d.overdue,d.avgScore]),[""],["All Violations"],["Case ID","Date","Employee","Dept","Category","Severity","Status"],...violations.map(v=>[v.id,v.date,v.empName,v.dept,v.category,v.severity,v.status])];
+    const summary = [["PVMS Monthly MIS Report",COMPANY_NAME],[`Generated: ${new Date().toLocaleDateString("en-IN")}`,``],[""],["Department","Total","Open","Closed","Overdue","Risk Deduction","Score"],...deptStats.map(d=>[d.dept,d.total,d.open,d.closed,d.overdue,d.deduction,d.score]),[""],["All Violations"],["Case ID","Date","Employee","Dept","Category","Severity","Status"],...violations.map(v=>[v.id,v.date,v.empName,v.dept,v.category,v.severity,v.status])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "MIS Report");
     XLSX.writeFile(wb, `PVMS_MIS_${new Date().toISOString().slice(0,7)}.xlsx`);
     toast("MIS Excel exported","success");
@@ -2620,7 +2683,7 @@ function ReportsPage({ user, toast, setPage }) {
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead>
                 <tr style={{background:"var(--bg)"}}>
-                  {["Department","Total","Open","Closed","Overdue","Avg Score"].map(h=>(
+                  {["Department","Total","Open","Closed","Overdue","Deduction","Score"].map(h=>(
                     <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)"}}>{h}</th>
                   ))}
                 </tr>
@@ -2633,10 +2696,11 @@ function ReportsPage({ user, toast, setPage }) {
                     <td style={{padding:"10px 12px"}}><Badge status={d.open>0?"Open":"Closed"}/></td>
                     <td style={{padding:"10px 12px",fontFamily:"var(--mono)"}}>{d.closed}</td>
                     <td style={{padding:"10px 12px"}}>{d.overdue>0?<span style={{color:"var(--red)",fontWeight:600,fontFamily:"var(--mono)"}}>{d.overdue}</span>:<span style={{color:"var(--green)"}}>0</span>}</td>
+                    <td style={{padding:"10px 12px",fontFamily:"var(--mono)",fontWeight:600,color:d.deduction>0?"var(--red)":"var(--green)"}}>{d.deduction}</td>
                     <td style={{padding:"10px 12px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        <div style={{width:50,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${d.avgScore}%`,background:d.avgScore>85?"var(--green)":d.avgScore>70?"#D97706":"var(--red)"}}/></div>
-                        <span style={{fontSize:12,fontFamily:"var(--mono)",fontWeight:600,color:d.avgScore>85?"var(--green)":d.avgScore>70?"var(--amber)":"var(--red)"}}>{d.avgScore}</span>
+                        <div style={{width:50,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${d.score}%`,background:d.score>85?"var(--green)":d.score>70?"#D97706":"var(--red)"}}/></div>
+                        <span style={{fontSize:12,fontFamily:"var(--mono)",fontWeight:600,color:d.score>85?"var(--green)":d.score>70?"var(--amber)":"var(--red)"}}>{d.score}</span>
                       </div>
                     </td>
                   </tr>
@@ -4303,6 +4367,14 @@ function App() {
     cacheWhiteLogoForPdf(LOGO_WHITE_SRC);
   }, []);
 
+  useEffect(() => {
+    const syncNotifications = (event) => {
+      setNotifications(event.detail || DB.get("notifications",[]) || []);
+    };
+    window.addEventListener("pvms-notifications-updated", syncNotifications);
+    return () => window.removeEventListener("pvms-notifications-updated", syncNotifications);
+  }, []);
+
   const toast = useCallback((text, type="info") => {
     const id = Date.now();
     setToasts(t=>[...t, {id, text, type}]);
@@ -4373,7 +4445,7 @@ function App() {
       <div className="portal" style={{display:"flex",height:"100vh",overflow:"hidden",background:"#F9FAFB"}}>
         <Sidebar active={page} setPage={handleSetPage} user={user} notifCount={notifications.filter(n=>!n.read).length}/>
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
-          <Topbar page={page} user={user} notifications={notifications} setPage={handleSetPage} onLogout={handleLogout}/>
+          <Topbar page={page} user={user} notifications={notifications} setPage={handleSetPage} setEditId={setEditId} onLogout={handleLogout} onNotificationsChange={setNotifications}/>
           <div style={{flex:1,overflowY:"auto",padding:"22px 24px",background:"#F9FAFB"}}>
             {pageMap[page] || pageMap.dashboard}
           </div>
