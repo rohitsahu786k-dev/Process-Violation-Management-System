@@ -492,6 +492,12 @@ const DISCIPLINARY_MATRIX = {
   Critical: ["Final Warning + Immediate Suspension","Termination Review","Termination Recommendation","Termination"],
 };
 
+function getDisciplinaryMatrix() {
+  const saved = DB.get("disciplinaryMatrix", null);
+  if (!saved || typeof saved !== "object") return DISCIPLINARY_MATRIX;
+  return { ...DISCIPLINARY_MATRIX, ...saved };
+}
+
 const DEFAULT_EMAIL_TEMPLATES = [
   {
     id:"caseRegistered",
@@ -914,12 +920,12 @@ function Pagination({ total, page, perPage, onChange }) {
   for (let i = 1; i <= Math.min(pages, 7); i++) nums.push(i);
   return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",borderTop:"1px solid var(--line)",fontSize:12,color:"var(--text3)"}}>
-      <span>Showing {Math.min((page-1)*perPage+1,total)}{Math.min(page*perPage,total)} of {total}</span>
+      <span>Showing {Math.min((page-1)*perPage+1,total)}-{Math.min(page*perPage,total)} of {total}</span>
       <div style={{display:"flex",gap:3}}>
         {nums.map(n => (
           <button key={n} onClick={()=>onChange(n)} style={{padding:"3px 8px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:n===page?"var(--blue)":"var(--bg3)",color:n===page?"#fff":"var(--text2)",fontFamily:"var(--mono)",fontSize:11,cursor:"pointer"}}>{n}</button>
         ))}
-        {pages > 7 && <span style={{padding:"3px 6px"}}>{pages}</span>}
+        {pages > 7 && <span style={{padding:"3px 6px"}}>... {pages}</span>}
       </div>
     </div>
   );
@@ -977,10 +983,82 @@ function downloadDataUrl(dataUrl, filename="document.pdf") {
   a.remove();
 }
 
+function escapePreviewHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildWarningLetterPreviewHtml(letter) {
+  const rows = [
+    ["Employee", `${letter.empName || ""}${letter.empCode ? ` (${letter.empCode})` : ""}`],
+    ["Department", letter.dept || ""],
+    ["Designation", letter.designation || ""],
+    ["Case Reference", letter.caseId || ""],
+    ["Violation Date", letter.violationDate || ""],
+    ["Severity", letter.severity || ""],
+    ["SOP / Policy", letter.sopViolated || "Company Process Standards"],
+    ["Category", letter.category || ""],
+    ["Issued By", letter.issuedBy || "HOD + HR Manager"],
+  ];
+  return `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.55;background:#fff;padding:24px;max-width:760px;margin:0 auto">
+      <div style="border-bottom:3px solid #E31E24;padding-bottom:12px;margin-bottom:18px">
+        <div style="font-size:20px;font-weight:700">ONEPWS Pvt. Ltd.</div>
+        <div style="font-size:11px;color:#6B7280;text-transform:uppercase;letter-spacing:.08em">Confidential HR Document</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:16px;font-size:12px;color:#374151;margin-bottom:18px">
+        <div><strong>Letter ID:</strong> ${escapePreviewHtml(letter.id)}</div>
+        <div><strong>Date:</strong> ${escapePreviewHtml(letter.letterDate)}</div>
+      </div>
+      <h1 style="font-size:18px;text-align:center;text-transform:uppercase;margin:8px 0 20px">${escapePreviewHtml(letter.letterType || "Warning Letter")}</h1>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px;font-size:12px">
+        ${rows.map(([label,value]) => `
+          <tr>
+            <td style="width:32%;background:#F9FAFB;border:1px solid #E5E7EB;padding:7px 9px;font-weight:700;color:#374151">${escapePreviewHtml(label)}</td>
+            <td style="border:1px solid #E5E7EB;padding:7px 9px">${escapePreviewHtml(value)}</td>
+          </tr>
+        `).join("")}
+      </table>
+      <p>Dear ${escapePreviewHtml(letter.empName || "Employee")},</p>
+      <p>This ${escapePreviewHtml(letter.letterType || "warning letter")} is formally issued for the process compliance violation recorded under case ${escapePreviewHtml(letter.caseId || "")}.</p>
+      <p><strong>Violation Details:</strong> ${escapePreviewHtml(letter.description || "")}</p>
+      <p><strong>Corrective Expectation:</strong> ${escapePreviewHtml(letter.corrective || "Strict adherence to all applicable SOPs and company policies.")}</p>
+      <p>You are required to acknowledge this letter and ensure that the same or similar violation is not repeated. Any recurrence may attract stricter disciplinary action as per company policy.</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:42px;font-size:11px;text-align:center;color:#6B7280">
+        <div><div style="border-top:1px solid #9CA3AF;padding-top:7px">HOD / Department Head</div></div>
+        <div><div style="border-top:1px solid #9CA3AF;padding-top:7px">HR Manager / HR BP</div></div>
+        <div><div style="border-top:1px solid #9CA3AF;padding-top:7px">Management</div></div>
+      </div>
+    </div>
+  `;
+}
+
 function WarningLetterModal({ letter, onClose }) {
+  const dataUrl = letter?.attachmentDataUrl || "";
+  const [pdfUrl, setPdfUrl] = useState("");
+  useEffect(() => {
+    let objectUrl = "";
+    if (!dataUrl) { setPdfUrl(""); return; }
+    fetch(dataUrl)
+      .then(res => res.blob())
+      .then(blob => {
+        objectUrl = URL.createObjectURL(blob);
+        setPdfUrl(objectUrl);
+      })
+      .catch(() => setPdfUrl(dataUrl));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [dataUrl]);
+
   if (!letter) return null;
   const fileName = letter.attachmentName || `${letter.id || "WarningLetter"}.pdf`;
-  const dataUrl = letter.attachmentDataUrl;
+  const previewUrl = pdfUrl || dataUrl;
+  const letterPreviewHtml = buildWarningLetterPreviewHtml(letter);
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,.55)",zIndex:5000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
       <div style={{width:"min(980px,96vw)",height:"min(760px,92vh)",background:"#FFFFFF",borderRadius:"var(--r2)",boxShadow:"var(--sh2)",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
@@ -990,17 +1068,20 @@ function WarningLetterModal({ letter, onClose }) {
             <div style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--mono)"}}>{letter.id}  {letter.caseId}</div>
           </div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <Btn size="sm" onClick={()=>dataUrl && window.open(dataUrl, "_blank")} icon={<Icon name="eye" size={12}/>}>Open</Btn>
+            <Btn size="sm" onClick={()=>previewUrl && window.open(previewUrl, "_blank")} icon={<Icon name="eye" size={12}/>}>Open</Btn>
             <Btn size="sm" variant="primary" onClick={()=>downloadDataUrl(dataUrl, fileName)} icon={<Icon name="download" size={12} color="#fff"/>}>Download</Btn>
             <Btn size="sm" ghost onClick={onClose} icon={<Icon name="x" size={12}/>}>Close</Btn>
           </div>
         </div>
-        <div style={{flex:1,background:"var(--bg2)"}}>
-          {dataUrl ? (
-            <iframe title="Warning letter preview" src={dataUrl} style={{width:"100%",height:"100%",border:0,background:"#FFFFFF"}}/>
+        <div style={{flex:1,background:"var(--bg2)",display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(320px,.75fr)",minHeight:0}}>
+          {previewUrl ? (
+            <iframe title="Warning letter PDF preview" src={previewUrl} style={{width:"100%",height:"100%",border:0,background:"#FFFFFF"}}/>
           ) : (
             <EmptyState icon="file" title="Preview unavailable" sub="Generate the PDF again to refresh this attachment"/>
           )}
+          <div style={{borderLeft:"1px solid var(--line)",overflow:"auto",background:"#F9FAFB"}}>
+            <div dangerouslySetInnerHTML={{__html:letterPreviewHtml}}/>
+          </div>
         </div>
       </div>
     </div>
@@ -1942,7 +2023,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
               <div style={{fontWeight:600,marginBottom:4}}> Repeat Violation Alert</div>
               <div>{form.empName} has <strong>{repeatAlert.count}</strong> prior violation(s) on record.</div>
               <div style={{marginTop:4,fontSize:11,color:"var(--amber)"}}>Last: {repeatAlert.last.id}  {repeatAlert.last.severity}  {repeatAlert.last.date}</div>
-              <div style={{marginTop:6,fontWeight:600,fontSize:11,color:"var(--red)"}}>Suggested action: {DISCIPLINARY_MATRIX[form.severity]?.[Math.min(repeatAlert.count,3)]||"Escalate"}</div>
+              <div style={{marginTop:6,fontWeight:600,fontSize:11,color:"var(--red)"}}>Suggested action: {getDisciplinaryMatrix()[form.severity]?.[Math.min(repeatAlert.count,3)]||"Escalate"}</div>
             </div>
           )}
 
@@ -2319,7 +2400,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               {(() => {
                 const emp = DB.get("users",[]).find(u=>u.id===violation.empId);
                 const prevCount = DB.get("violations",[]).filter(v=>v.empId===violation.empId&&v.id!==violation.id&&v.status==="Closed").length;
-                const action = DISCIPLINARY_MATRIX[violation.severity]?.[Math.min(prevCount,3)];
+                const action = getDisciplinaryMatrix()[violation.severity]?.[Math.min(prevCount,3)];
                 return (
                   <div>
                     <div style={{fontSize:11,color:"var(--text3)",marginBottom:6}}>Based on severity ({violation.severity}) and prior violations ({prevCount}):</div>
@@ -2423,15 +2504,60 @@ function DisciplinaryPage({ user, toast }) {
   const caseViolations = violations.filter(isComplianceScoredCase);
   const caseEmployeeIds = new Set(caseViolations.map(v => findCaseEmployee(v, allUsers)?.id).filter(Boolean));
   const employees = employeeComplianceUsers(allUsers, caseViolations).filter(u=>u.role==="User/Employee" && caseEmployeeIds.has(u.id));
+  const [matrix, setMatrix] = useState(()=>getDisciplinaryMatrix());
+  const [editingMatrix, setEditingMatrix] = useState(false);
+  const [matrixDraft, setMatrixDraft] = useState(()=>JSON.parse(JSON.stringify(getDisciplinaryMatrix())));
 
   const getHistory = (empId) => caseViolations.filter(v=>findCaseEmployee(v, allUsers)?.id===empId);
+  const canEditMatrix = user.role === "Master Admin";
+
+  const updateMatrixCell = (severity, index, value) => {
+    setMatrixDraft(draft => ({
+      ...draft,
+      [severity]: (draft[severity] || DISCIPLINARY_MATRIX[severity]).map((item, i) => i === index ? value : item)
+    }));
+  };
+
+  const startMatrixEdit = () => {
+    setMatrixDraft(JSON.parse(JSON.stringify(matrix)));
+    setEditingMatrix(true);
+  };
+
+  const saveMatrix = () => {
+    setMatrix(matrixDraft);
+    DB.set("disciplinaryMatrix", matrixDraft);
+    const logs = DB.get("auditLogs", []);
+    logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"DISCIPLINARY_MATRIX_UPDATED", entity:"Disciplinary Matrix", detail:"Updated disciplinary action matrix", ip:"local" });
+    DB.set("auditLogs", logs);
+    setEditingMatrix(false);
+    toast("Disciplinary matrix saved", "success");
+  };
+
+  const resetMatrix = () => {
+    setMatrixDraft(JSON.parse(JSON.stringify(DISCIPLINARY_MATRIX)));
+    toast("Default matrix loaded. Click Save to apply.", "info");
+  };
 
   return (
     <div>
       <PageHeader title="Disciplinary Management" sub="Configurable disciplinary matrix  Auto-suggestion based on severity and repeat count"/>
 
       <Card style={{marginBottom:16}}>
-        <CardHeader title="Disciplinary Matrix (Configurable)" subtitle="Master Admin can modify this matrix"/>
+        <CardHeader
+          title="Disciplinary Matrix (Configurable)"
+          subtitle="Master Admin can modify this matrix"
+          actions={canEditMatrix && (
+            editingMatrix ? (
+              <>
+                <Btn size="sm" onClick={resetMatrix}>Reset</Btn>
+                <Btn size="sm" ghost onClick={()=>setEditingMatrix(false)}>Cancel</Btn>
+                <Btn size="sm" variant="primary" onClick={saveMatrix}>Save Matrix</Btn>
+              </>
+            ) : (
+              <Btn size="sm" variant="primary" onClick={startMatrixEdit} icon={<Icon name="edit" size={12} color="#fff"/>}>Edit Matrix</Btn>
+            )
+          )}
+        />
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead>
@@ -2443,11 +2569,15 @@ function DisciplinaryPage({ user, toast }) {
               </tr>
             </thead>
             <tbody>
-              {Object.entries(DISCIPLINARY_MATRIX).map(([sev,actions])=>(
+              {Object.entries(editingMatrix ? matrixDraft : matrix).map(([sev,actions])=>(
                 <tr key={sev} style={{borderBottom:"1px solid var(--line)"}}>
                   <td style={{padding:"10px 14px"}}><Badge severity={sev}/></td>
                   {actions.map((a,i)=>(
-                    <td key={i} style={{padding:"10px 14px",fontSize:12.5,color:"var(--text2)"}}>{a}</td>
+                    <td key={i} style={{padding:"10px 14px",fontSize:12.5,color:"var(--text2)"}}>
+                      {editingMatrix ? (
+                        <Input value={a} onChange={v=>updateMatrixCell(sev, i, v)} style={{minWidth:220}}/>
+                      ) : a}
+                    </td>
                   ))}
                 </tr>
               ))}
@@ -2475,7 +2605,7 @@ function DisciplinaryPage({ user, toast }) {
                 const hist = getHistory(emp.id);
                 const warnings = DB.get("warnings",[]).filter(w=>w.empId===emp.id && (!w.caseId || caseViolations.some(v=>v.id===w.caseId)));
                 const lastSev = hist.length ? hist[hist.length-1].severity : null;
-                const suggested = lastSev ? DISCIPLINARY_MATRIX[lastSev]?.[Math.min(hist.length-1,3)] : "";
+                const suggested = lastSev ? matrix[lastSev]?.[Math.min(hist.length-1,3)] : "";
                 return (
                   <tr key={emp.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
                     <td style={{padding:"10px 14px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><Avatar name={emp.name}/><div><div style={{fontSize:13,fontWeight:500}}>{emp.name}</div><div style={{fontSize:11,color:"var(--text3)"}}>{emp.empCode}</div></div></div></td>
@@ -2614,6 +2744,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
 // ============================================================
 function ReportsPage({ user, toast, setPage }) {
   const violations = DB.get("violations",[]);
+  const caseImportRef = useRef(null);
   const reportDepartments = [...new Set([
     ...activeMasterOptions("masterDepts", DEPARTMENTS),
     ...violations.map(v=>v.dept).filter(Boolean)
@@ -2651,10 +2782,99 @@ function ReportsPage({ user, toast, setPage }) {
 
   const downloadTemplate = () => {
     const wb = XLSX.utils.book_new();
-    const rows=[["PVMS Import Template  Fill and upload"],[""],["Case ID (leave blank)","Date (YYYY-MM-DD)","Department","Employee Name","Employee Code","Designation","Category","Severity","Description","SOP Violated","Root Cause","Immediate Action","Risk Score (1-10)","Repeat (Yes/No)","Status"],...Array(5).fill(["","","","","","","","Minor","","","","","","No","Open"])];
+    const rows=[["Case ID (leave blank)","Date (YYYY-MM-DD)","Department","Employee Name","Employee Code","Designation","Category","Severity","Description","SOP Violated","Root Cause","Immediate Action","Risk Score (1-10)","Repeat (Yes/No)","Status"],...Array(5).fill(["","","","","","","","Minor","","","","","","No","Open"])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Import Template");
     XLSX.writeFile(wb, "PVMS_Import_Template.xlsx");
     toast("Import template downloaded","success");
+  };
+
+  const normalizeImportDate = (value) => {
+    if (!value) return new Date().toISOString().slice(0,10);
+    if (typeof value === "number" && XLSX.SSF?.parse_date_code) {
+      const parsed = XLSX.SSF.parse_date_code(value);
+      if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2,"0")}-${String(parsed.d).padStart(2,"0")}`;
+    }
+    const raw = String(value).trim();
+    const date = new Date(raw);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0,10);
+    return raw;
+  };
+
+  const importCases = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type:"array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { header:1, defval:"" });
+      const headerIndex = rawRows.findIndex(row =>
+        row.some(cell => String(cell).trim() === "Employee Name") &&
+        row.some(cell => String(cell).trim() === "Category")
+      );
+      if (headerIndex < 0) throw new Error("Import header row not found");
+      const headers = rawRows[headerIndex].map(cell => String(cell || "").trim());
+      const rows = rawRows.slice(headerIndex + 1).map(row =>
+        Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""]))
+      );
+      const current = DB.get("violations", []);
+      let added = 0, updated = 0;
+      rows.forEach((row, index) => {
+        const empName = String(row["Employee Name"] || row.Employee || "").trim();
+        const category = String(row.Category || row["Violation Category"] || "").trim();
+        const description = String(row.Description || row["Incident Description"] || "").trim();
+        if (!empName && !category && !description) return;
+        const existingId = String(row["Case ID (leave blank)"] || row["Case ID"] || "").trim();
+        const existingIndex = existingId ? current.findIndex(v => v.id === existingId) : -1;
+        const caseNo = existingIndex >= 0 ? current[existingIndex].caseNo : DB.nextSeq("VMS");
+        const id = existingIndex >= 0 ? current[existingIndex].id : (existingId || `VMS-${new Date().getFullYear()}-${String(caseNo).padStart(4,"0")}`);
+        const imported = {
+          ...(existingIndex >= 0 ? current[existingIndex] : {}),
+          id,
+          caseNo,
+          date: normalizeImportDate(row["Date (YYYY-MM-DD)"] || row.Date),
+          dept: String(row.Department || row.Dept || "").trim(),
+          empName,
+          empCode: String(row["Employee Code"] || row["Emp Code"] || "").trim(),
+          designation: String(row.Designation || "").trim(),
+          category: category || "Process Non-Adherence",
+          severity: ["Minor","Moderate","Major","Critical"].includes(row.Severity) ? row.Severity : "Minor",
+          description,
+          sopViolated: String(row["SOP Violated"] || row["SOP / Policy Violated"] || "").trim(),
+          rootCause: String(row["Root Cause"] || "").trim(),
+          immediateAction: String(row["Immediate Action"] || "").trim(),
+          riskScore: Number(row["Risk Score (1-10)"] || row.Risk || 1),
+          repeatViolation: /^y(es)?$/i.test(String(row["Repeat (Yes/No)"] || row.Repeat || "")),
+          status: normalizeCaseStatus(row.Status || "Open"),
+          importedAt: Date.now(),
+          updatedAt: Date.now(),
+          evidence: existingIndex >= 0 ? (current[existingIndex].evidence || []) : [],
+          capaActions: existingIndex >= 0 ? (current[existingIndex].capaActions || []) : [],
+          fiveWhy: existingIndex >= 0 ? (current[existingIndex].fiveWhy || []) : [],
+          auditLog: [
+            ...((existingIndex >= 0 ? current[existingIndex].auditLog : []) || []),
+            { action: existingIndex >= 0 ? "Case updated from MIS import" : "Case imported from MIS file", by:user.name, at:Date.now() }
+          ]
+        };
+        if (existingIndex >= 0) {
+          current[existingIndex] = imported;
+          updated++;
+        } else {
+          current.push(imported);
+          added++;
+        }
+      });
+      DB.set("violations", current);
+      syncComplianceScores(DB.get("users",[]), current);
+      const logs = DB.get("auditLogs", []);
+      logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"MIS_CASE_IMPORT", entity:"Reports & MIS", detail:`Imported cases: ${added} added, ${updated} updated`, ip:"local" });
+      DB.set("auditLogs", logs);
+      toast(`Case import complete: ${added} added, ${updated} updated`, "success");
+    } catch (err) {
+      toast("Unable to import case file", "error");
+    } finally {
+      event.target.value = "";
+    }
   };
 
   return (
@@ -2716,9 +2936,11 @@ function ReportsPage({ user, toast, setPage }) {
             <div style={{border:"1.5px dashed var(--line2)",borderRadius:"var(--r2)",padding:14,textAlign:"center",marginBottom:12}}>
               <div style={{fontSize:13,fontWeight:500,color:"var(--text2)",marginBottom:4}}>Import Existing Cases</div>
               <div style={{fontSize:11,color:"var(--text3)",marginBottom:10}}>Download template, fill and upload to the system</div>
+              <input ref={caseImportRef} type="file" accept=".xlsx,.xls,.csv" onChange={importCases} style={{display:"none"}}/>
               <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
                 <Btn size="sm" onClick={downloadTemplate}> Download Template</Btn>
-                <Btn size="sm" variant="primary" onClick={()=>setPage("medialibrary")} icon={<Icon name="upload" size={14} color="#fff"/>}> Media Library</Btn>
+                <Btn size="sm" variant="primary" onClick={()=>caseImportRef.current?.click()} icon={<Icon name="upload" size={14} color="#fff"/>}> Upload Cases</Btn>
+                <Btn size="sm" onClick={()=>setPage("medialibrary")} icon={<Icon name="image" size={14}/>}> Media Library</Btn>
               </div>
             </div>
             <div style={{background:"var(--bg)",borderRadius:"var(--r2)",padding:12}}>
@@ -2917,7 +3139,7 @@ function MasterDataPage({ user, toast }) {
                         onFocus={e=>e.target.select()}
                         />
                         <Btn size="sm" variant="primary" onClick={saveEdit}>Save</Btn>
-                        <Btn size="sm" ghost onClick={cancelEdit}></Btn>
+                        <Btn size="sm" ghost onClick={cancelEdit}>Cancel</Btn>
                       </div>
                     ) : (
                       <span>{item.name}</span>
@@ -3611,7 +3833,7 @@ function UsersPage({ user, toast }) {
                           {PERM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
                         </select>
                       ) : (
-                        <span style={{fontSize:12,color:p===""?"var(--green)":p===""?"var(--line2)":"var(--text3)",fontWeight:p===""?700:400}}>{p}</span>
+                        <span style={{fontSize:12,color:p===""?"var(--line2)":"var(--text3)",fontWeight:p===""?700:400}}>{p || "-"}</span>
                       )}
                     </td>
                   ))}
@@ -3638,7 +3860,7 @@ function UsersPage({ user, toast }) {
                     </div>
                   </td>
                   <td colSpan={ROLES.length+1} style={{padding:"8px 12px",fontSize:11,color:"var(--text3)"}}>
-                    New row defaults to "" for all roles. Edit after adding.
+                    New row defaults to no access for all roles. Edit after adding.
                   </td>
                 </tr>
               )}
@@ -3877,7 +4099,7 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
     sopViolated:violation.sopViolated,
     category:violation.category,
     description:violation.description,
-    disciplinaryAction:DISCIPLINARY_MATRIX[violation.severity]?.[0]||"Formal Warning",
+    disciplinaryAction:getDisciplinaryMatrix()[violation.severity]?.[0]||"Formal Warning",
     corrective:"Strict adherence to all applicable SOPs and company policies.",
     issuedBy:issuer,
     status:"Issued",

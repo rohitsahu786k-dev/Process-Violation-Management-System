@@ -10,6 +10,7 @@ const ALLOWED_STATE_KEYS = new Set([
   "masterCats",
   "masterRCs",
   "masterDesigs",
+  "disciplinaryMatrix",
   "emailTemplates",
   "permMatrix",
   "seeded",
