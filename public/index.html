@@ -55,7 +55,11 @@ button{cursor:pointer}
 .media-dropzone{border:2px dashed var(--line2);border-radius:var(--r2);padding:32px;text-align:center;transition:border-color .15s,background .15s}
 .media-dropzone.dragover{border-color:var(--blue);background:var(--blue-l)}
 .upload-progress{height:4px;background:var(--bg2);border-radius:2px;overflow:hidden;margin-top:6px}
-.upload-progress-bar{height:100%;background:var(--blue);transition:width .2s}
+.progress-fill,.upload-progress-bar{height:100%;transition:width .65s cubic-bezier(.22,1,.36,1),background-color .25s ease,transform .25s ease;will-change:width}
+.upload-progress-bar{background:var(--blue)}
+.workflow-step-dot{transition:background-color .25s ease,border-color .25s ease,color .25s ease,transform .25s ease}
+.workflow-step-line{transition:background-color .35s ease,height .35s ease}
+.workflow-step-dot.current{transform:scale(1.08);box-shadow:0 0 0 3px var(--blue-l)}
 </style>
 </head>
 <body>
@@ -484,8 +488,8 @@ function WorkflowTracker({ violation, isDraftForm=false }) {
         const bd = done ? "var(--green-bd)" : current ? "var(--blue)" : "var(--line)";
         return (
           <div key={step.title} style={{display:"flex",gap:10,paddingBottom:i<CASE_WORKFLOW_STEPS.length-1?12:0,position:"relative"}}>
-            {i<CASE_WORKFLOW_STEPS.length-1&&<div style={{position:"absolute",left:11,top:22,bottom:0,width:1,background:done?"var(--green-bd)":"var(--line)"}}/>}
-            <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,background:bg,color,border:`1px solid ${bd}`}}>
+            {i<CASE_WORKFLOW_STEPS.length-1&&<div className="workflow-step-line" style={{position:"absolute",left:11,top:22,bottom:0,width:1,background:done?"var(--green-bd)":"var(--line)"}}/>}
+            <div className={`workflow-step-dot ${current ? "current" : ""}`} style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,background:bg,color,border:`1px solid ${bd}`}}>
               {done?<Icon name="check" size={12} color="var(--green)"/>:i+1}
             </div>
             <div style={{paddingTop:2}}>
@@ -704,10 +708,8 @@ function employeeOptionLabel(user) {
   return detail ? `${user.name} (${detail})` : user.name;
 }
 
-const COMPLIANCE_ROLES = ["User/Employee", "Process Dept Rep"];
-
 function isComplianceUser(user) {
-  return user && COMPLIANCE_ROLES.includes(user.role);
+  return user && user.active !== false && user.id !== "u1" && user.name && user.role !== "Master Admin";
 }
 
 function isComplianceScoredCase(violation) {
@@ -738,6 +740,58 @@ function withComplianceScores(users = [], violations = []) {
 
 function employeeComplianceUsers(users = DB.get("users", []), violations = DB.get("violations", [])) {
   return withComplianceScores(users, violations).filter(isComplianceUser);
+}
+
+function caseEmployeeKey(violation, employee) {
+  return employee?.id || violation?.empId || `${violation?.empCode || ""}|${violation?.empName || ""}`.toLowerCase();
+}
+
+function employeeComplianceRows(users = DB.get("users", []), violations = DB.get("violations", []), warnings = DB.get("warnings", [])) {
+  const scoredCases = (violations || []).filter(isComplianceScoredCase);
+  const rows = new Map();
+  const ensureRow = (violation, employee) => {
+    const key = caseEmployeeKey(violation, employee);
+    if (!key) return null;
+    if (!rows.has(key)) {
+      rows.set(key, {
+        id:employee?.id || violation?.empId || key,
+        key,
+        name:employee?.name || violation?.empName || "Unknown Employee",
+        empCode:employee?.empCode || violation?.empCode || "",
+        dept:employee?.dept || violation?.dept || "",
+        designation:employee?.designation || violation?.designation || "",
+        role:employee?.role || "Case Employee",
+        active:employee?.active !== false,
+        complianceScore:100,
+        violations:0,
+        penalty:0,
+        cases:[],
+        warningCount:0
+      });
+    }
+    return rows.get(key);
+  };
+
+  (users || []).filter(isComplianceUser).forEach(user => ensureRow(null, user));
+  scoredCases.forEach(violation => {
+    const employee = findCaseEmployee(violation, users || []);
+    const row = ensureRow(violation, employee);
+    if (!row) return;
+    row.cases.push(violation);
+    row.violations += 1;
+    row.penalty += casePenalty(violation);
+    row.complianceScore = Math.max(0, 100 - row.penalty);
+  });
+
+  const activeWarnings = mergedWarningRecords(warnings, violations);
+  activeWarnings.forEach(warning => {
+    const violation = scoredCases.find(v => v.id === warning.caseId);
+    const employee = (users || []).find(u => u.id === warning.empId) || (violation ? findCaseEmployee(violation, users || []) : null);
+    const row = ensureRow(violation || warning, employee);
+    if (row) row.warningCount += 1;
+  });
+
+  return [...rows.values()].filter(row => row.active !== false);
 }
 
 function syncComplianceScores(users = DB.get("users", []), violations = DB.get("violations", []), force = false) {
@@ -1105,6 +1159,51 @@ function WarningLetterModal({ letter, onClose }) {
           <div style={{borderLeft:"1px solid var(--line)",overflow:"auto",background:"#F9FAFB"}}>
             <div dangerouslySetInnerHTML={{__html:letterPreviewHtml}}/>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function attachmentPreviewType(attachment) {
+  const url = String(attachment?.url || attachment?.secureUrl || attachment?.attachmentDataUrl || "");
+  const name = String(attachment?.name || attachment?.fileName || attachment?.attachmentName || "");
+  const type = String(attachment?.type || attachment?.fileType || "").toLowerCase();
+  const mime = String(attachment?.mimeType || "").toLowerCase();
+  const value = `${url} ${name} ${mime}`.toLowerCase();
+  if (type === "image" || mime.startsWith("image/") || /^data:image\//.test(url) || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(value)) return "image";
+  if (type === "video" || mime.startsWith("video/") || /^data:video\//.test(url) || /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(value)) return "video";
+  if (mime === "application/pdf" || /^data:application\/pdf/i.test(url) || /\.pdf(\?|#|$)/i.test(value)) return "pdf";
+  return "document";
+}
+
+function AttachmentPreviewModal({ attachment, onClose }) {
+  if (!attachment) return null;
+  const previewUrl = attachment.url || attachment.secureUrl || attachment.attachmentDataUrl || "";
+  const title = attachment.name || attachment.fileName || attachment.attachmentName || "Attachment";
+  const kind = attachmentPreviewType(attachment);
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,.58)",zIndex:5000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+      <div style={{width:"min(980px,96vw)",height:"min(760px,92vh)",background:"#FFFFFF",borderRadius:"var(--r2)",boxShadow:"var(--sh2)",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"12px 16px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:600,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{title}</div>
+            <div style={{fontSize:11,color:"var(--text3)"}}>{attachment.label || (kind === "pdf" ? "PDF Preview" : kind.charAt(0).toUpperCase() + kind.slice(1))}</div>
+          </div>
+          <button onClick={onClose} title="Close" style={{width:32,height:32,border:"1px solid var(--line)",borderRadius:"var(--r)",background:"var(--bg3)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"var(--text2)"}}>
+            <Icon name="x" size={16}/>
+          </button>
+        </div>
+        <div style={{flex:1,minHeight:0,background:"var(--bg2)",display:"flex",alignItems:"center",justifyContent:"center",padding:kind==="image"||kind==="video"?18:0}}>
+          {!previewUrl ? (
+            <EmptyState icon="file" title="Preview unavailable" sub="Attachment link is unavailable"/>
+          ) : kind === "image" ? (
+            <img src={previewUrl} alt={title} style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",borderRadius:"var(--r)",background:"#fff",boxShadow:"var(--sh)"}}/>
+          ) : kind === "video" ? (
+            <video src={previewUrl} controls style={{maxWidth:"100%",maxHeight:"100%",background:"#000",borderRadius:"var(--r)"}}/>
+          ) : (
+            <iframe title={title} src={previewUrl} style={{width:"100%",height:"100%",border:0,background:"#FFFFFF"}}/>
+          )}
         </div>
       </div>
     </div>
@@ -1545,7 +1644,7 @@ function DashboardPage({ user, setPage }) {
               <div key={d} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                 <div style={{fontSize:12,color:"var(--text2)",width:160,flexShrink:0,textAlign:"right"}}>{d}</div>
                 <div style={{flex:1,height:8,background:"var(--bg2)",borderRadius:4,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${deptCounts[d]/maxDept*100}%`,background:"var(--blue)",borderRadius:4,transition:"width .5s"}}/>
+                  <div className="progress-fill" style={{width:`${deptCounts[d]/maxDept*100}%`,background:"var(--blue)",borderRadius:4}}/>
                 </div>
                 <div style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",width:24,textAlign:"right"}}>{deptCounts[d]}</div>
               </div>
@@ -1562,7 +1661,7 @@ function DashboardPage({ user, setPage }) {
                 <div style={{width:10,height:10,borderRadius:"50%",background:SEVERITY_CONFIG[s].color,flexShrink:0}}/>
                 <span style={{flex:1,fontSize:13}}>{s}</span>
                 <div style={{width:80,height:6,background:"var(--bg2)",borderRadius:3,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${c/Math.max(total,1)*100}%`,background:SEVERITY_CONFIG[s].color}}/>
+                  <div className="progress-fill" style={{width:`${c/Math.max(total,1)*100}%`,background:SEVERITY_CONFIG[s].color}}/>
                 </div>
                 <span style={{fontSize:12,fontFamily:"var(--mono)",color:"var(--text3)",width:20,textAlign:"right"}}>{c}</span>
               </div>
@@ -1601,7 +1700,7 @@ function DashboardPage({ user, setPage }) {
                 <span style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",width:14}}>{i+1}</span>
                 <span style={{flex:1,fontSize:12,color:"var(--text2)"}}>{cat}</span>
                 <div style={{width:80,height:6,background:"var(--bg2)",borderRadius:3,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${cnt/Math.max(topCats[0][1],1)*100}%`,background:"var(--blue)",borderRadius:3}}/>
+                  <div className="progress-fill" style={{width:`${cnt/Math.max(topCats[0][1],1)*100}%`,background:"var(--blue)",borderRadius:3}}/>
                 </div>
                 <span style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--text3)",width:20,textAlign:"right"}}>{cnt}</span>
               </div>
@@ -2148,6 +2247,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const [showCapaForm, setShowCapaForm] = useState(false);
   const [investigatorRemarks, setInvestigatorRemarks] = useState(violation.investigatorRemarks||"");
   const [letterPreview, setLetterPreview] = useState(null);
+  const [attachmentPreview, setAttachmentPreview] = useState(null);
 
   const canEdit = ["Master Admin","HOD","Management"].includes(user.role);
   const users = DB.get("users",[]);
@@ -2250,7 +2350,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
       if (warning) openWarningPreview(warning);
       return;
     }
-    if (attachment.url) window.open(attachment.url, "_blank");
+    if (attachment.url) setAttachmentPreview(attachment);
     else toast("Attachment link is unavailable", "error");
   };
 
@@ -2282,6 +2382,17 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                 DB.set("auditLogs", logs);
                 toast(`Warning letter revoked and status rolled back to ${caseStatusLabel(result.rollbackStatus)}`, "success");
               }} icon={<Icon name="x-circle" size={12}/>}>Revoke Warning Letter</Btn>
+            )}
+            {user.role === "Master Admin" && hasWarningLetter && (
+              <Btn size="sm" variant="danger" onClick={() => {
+                if (!window.confirm(`Permanently delete warning letter(s) for case ${violation.id}? Case status will not be rolled back.`)) return;
+                const result = deleteWarningLettersForCase(violation, user);
+                setViolations([...result.violations]);
+                const logs = DB.get("auditLogs", []);
+                logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"WARNING_DELETED", entity:violation.id, detail:`Deleted ${result.deletedWarnings.length} warning letter(s) for ${violation.empName || "unknown"}`, ip:"local" });
+                DB.set("auditLogs", logs);
+                toast(`Warning letter deleted for case ${violation.id}`, "success");
+              }} icon={<Icon name="trash" size={12}/>}>Delete Warning Letter</Btn>
             )}
             {user.role === "Master Admin" && (
               <Btn size="sm" variant="danger" onClick={() => {
@@ -2496,6 +2607,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
         </div>
       </div>
       <WarningLetterModal letter={letterPreview} onClose={()=>setLetterPreview(null)}/>
+      <AttachmentPreviewModal attachment={attachmentPreview} onClose={()=>setAttachmentPreview(null)}/>
     </div>
   );
 }
@@ -2547,8 +2659,9 @@ function DisciplinaryPage({ user, toast }) {
   const violations = DB.get("violations",[]);
   const allUsers = DB.get("users",[]);
   const caseViolations = violations.filter(isComplianceScoredCase);
+  const activeWarnings = reconcileWarningLetters({ persist:false }).warnings;
   const caseEmployeeIds = new Set(caseViolations.map(v => findCaseEmployee(v, allUsers)?.id).filter(Boolean));
-  const employees = employeeComplianceUsers(allUsers, caseViolations).filter(u=>u.role==="User/Employee" && caseEmployeeIds.has(u.id));
+  const employees = employeeComplianceRows(allUsers, caseViolations, activeWarnings).filter(u=>caseEmployeeIds.has(u.id) || u.cases.length > 0);
   const [matrix, setMatrix] = useState(()=>getDisciplinaryMatrix());
   const [editingMatrix, setEditingMatrix] = useState(false);
   const [matrixDraft, setMatrixDraft] = useState(()=>JSON.parse(JSON.stringify(getDisciplinaryMatrix())));
@@ -2647,9 +2760,9 @@ function DisciplinaryPage({ user, toast }) {
                 <tr><td colSpan={6}><EmptyState icon="inbox" title="No disciplinary records" sub="Employees will appear here after a case is registered"/></td></tr>
               )}
               {employees.sort((a,b)=>a.complianceScore-b.complianceScore).map(emp=>{
-                const hist = getHistory(emp.id);
-                const warnings = DB.get("warnings",[]).filter(w=>w.empId===emp.id && (!w.caseId || caseViolations.some(v=>v.id===w.caseId)));
-                const lastSev = hist.length ? hist[hist.length-1].severity : null;
+                const hist = emp.cases?.length ? emp.cases : getHistory(emp.id);
+                const warnings = activeWarnings.filter(w=>w.empId===emp.id && (!w.caseId || caseViolations.some(v=>v.id===w.caseId)));
+                const lastSev = hist.length ? normalizeSeverity(hist[hist.length-1].severity) : null;
                 const suggested = lastSev ? matrix[lastSev]?.[Math.min(hist.length-1,3)] : "";
                 return (
                   <tr key={emp.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
@@ -2659,7 +2772,7 @@ function DisciplinaryPage({ user, toast }) {
                     <td style={{padding:"10px 14px",fontFamily:"var(--mono)",color:warnings.length>0?"var(--red)":"var(--green)",fontWeight:600}}>{warnings.length}</td>
                     <td style={{padding:"10px 14px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <div style={{width:60,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${emp.complianceScore}%`,background:emp.complianceScore>80?"var(--green)":emp.complianceScore>60?"#D97706":"var(--red)"}}/></div>
+                        <div style={{width:60,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div className="progress-fill" style={{width:`${emp.complianceScore}%`,background:emp.complianceScore>80?"var(--green)":emp.complianceScore>60?"#D97706":"var(--red)"}}/></div>
                         <span style={{fontSize:12,fontFamily:"var(--mono)",fontWeight:600,color:emp.complianceScore>80?"var(--green)":emp.complianceScore>60?"var(--amber)":"var(--red)"}}>{emp.complianceScore}</span>
                       </div>
                     </td>
@@ -2679,7 +2792,7 @@ function DisciplinaryPage({ user, toast }) {
 // WARNING LETTERS PAGE
 // ============================================================
 function WarningLettersPage({ user, toast, setPage, setEditId }) {
-  const [warnings, setWarnings] = useState(DB.get("warnings",[]));
+  const [warnings, setWarnings] = useState(()=>reconcileWarningLetters().warnings);
   const [showNew, setShowNew] = useState(false);
   const [selectedCase, setSelectedCase] = useState("");
   const [letterType, setLetterType] = useState("Warning Letter Level-1");
@@ -2694,7 +2807,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
     if (!violation) { toast("Please select a case","error"); return; }
     const newW = issueWarningLetter(violation, user, toast, letterType, issuer, { download:false });
     if (!newW) return;
-    setWarnings([...DB.get("warnings",[])]);
+    setWarnings([...reconcileWarningLetters().warnings]);
     setLetterPreview(newW);
     setShowNew(false);
   };
@@ -2702,15 +2815,29 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
   const openWarningPreview = (warning) => {
     const prepared = prepareWarningPreview(warning, allViolations, user, toast);
     if (!prepared) return;
-    setWarnings([...DB.get("warnings",[])]);
+    setWarnings([...reconcileWarningLetters().warnings]);
     setLetterPreview(prepared);
   };
 
   const downloadWarning = (warning) => {
     const prepared = prepareWarningPreview(warning, allViolations, user, toast);
     if (!prepared) return;
-    setWarnings([...DB.get("warnings",[])]);
+    setWarnings([...reconcileWarningLetters().warnings]);
     downloadDataUrl(prepared.attachmentDataUrl, prepared.attachmentName || `${prepared.id}.pdf`);
+  };
+
+  const deleteWarning = (warning) => {
+    if (user.role !== "Master Admin") { toast("Only Master Admin can delete warning letters", "error"); return; }
+    if (!window.confirm(`Permanently delete warning letter ${warning.id}? Case status will not be rolled back.`)) return;
+    const violation = DB.get("violations", []).find(v => v.id === warning.caseId);
+    if (!violation) { toast("Linked case not found", "error"); return; }
+    const result = deleteWarningLettersForCase(violation, user, warning.id);
+    const logs = DB.get("auditLogs", []);
+    logs.unshift({ id:"al"+Date.now(), ts:Date.now(), user:user.name, role:user.role, action:"WARNING_DELETED", entity:warning.caseId, detail:`Deleted warning letter ${warning.id} for ${warning.empName || "unknown"}`, ip:"local" });
+    DB.set("auditLogs", logs);
+    setWarnings([...reconcileWarningLetters().warnings]);
+    setLetterPreview(prev => prev?.id === warning.id ? null : prev);
+    toast(result.deletedWarnings.length ? "Warning letter deleted" : "Warning letter already removed", "success");
   };
 
   return (
@@ -2771,6 +2898,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
                     <div style={{display:"flex",gap:6,flexWrap:"nowrap"}}>
                       <Btn size="sm" variant="primary" onClick={()=>openWarningPreview(w)} icon={<Icon name="eye" size={12} color="#fff"/>}>View</Btn>
                       <Btn size="sm" onClick={()=>downloadWarning(w)} icon={<Icon name="download" size={12}/>}>PDF</Btn>
+                      {user.role === "Master Admin" && <Btn size="sm" variant="danger" onClick={()=>deleteWarning(w)} icon={<Icon name="trash" size={12}/>}>Delete</Btn>}
                     </div>
                   </td>
                 </tr>
@@ -2789,6 +2917,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
 // ============================================================
 function ReportsPage({ user, toast, setPage }) {
   const violations = DB.get("violations",[]);
+  const warnings = reconcileWarningLetters({ persist:false }).warnings;
   const caseImportRef = useRef(null);
   const reportDepartments = [...new Set([
     ...activeMasterOptions("masterDepts", DEPARTMENTS),
@@ -2816,7 +2945,7 @@ function ReportsPage({ user, toast, setPage }) {
 
   const exportMIS = () => {
     const wb = XLSX.utils.book_new();
-    const summary = [["PVMS Monthly MIS Report",COMPANY_NAME],[`Generated: ${new Date().toLocaleDateString("en-IN")}`,``],[""],["Department","Total","Open","Closed","Overdue","Risk Deduction","Score"],...deptStats.map(d=>[d.dept,d.total,d.open,d.closed,d.overdue,d.deduction,d.score]),[""],["All Violations"],["Case ID","Date","Employee","Dept","Category","Severity","Status"],...violations.map(v=>[v.id,v.date,v.empName,v.dept,v.category,v.severity,v.status])];
+    const summary = [["PVMS Monthly MIS Report",COMPANY_NAME],[`Generated: ${new Date().toLocaleDateString("en-IN")}`,``],[""],["Department","Total","Open","Closed","Overdue","Risk Deduction","Deduction Breakdown","Score"],...deptStats.map(d=>[d.dept,d.total,d.open,d.closed,d.overdue,d.deduction,d.deductionBreakdown,d.score]),[""],["All Violations"],["Case ID","Date","Employee","Dept","Category","Severity","Status"],...violations.map(v=>[v.id,v.date,v.empName,v.dept,v.category,v.severity,caseStatusLabel(v.status)])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "MIS Report");
     XLSX.writeFile(wb, `PVMS_MIS_${new Date().toISOString().slice(0,7)}.xlsx`);
     toast("MIS Excel exported","success");
@@ -2827,9 +2956,9 @@ function ReportsPage({ user, toast, setPage }) {
     const wb = XLSX.utils.book_new();
     const vRows=[["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","Repeat","Risk","Due Date","Description"],...violations.map(v=>[v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.repeatViolation?"Yes":"No",v.riskScore,v.dueDate,v.description])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(vRows), "All Cases");
-    const uRows=[["Name","Emp Code","Dept","Role","Score","Violations"],...withComplianceScores(DB.get("users",[]), violations).map(u=>[u.name,u.empCode,u.dept,u.role,u.complianceScore,u.violations])];
+    const uRows=[["Name","Emp Code","Dept","Role","Score","Violations","Active Warnings"],...employeeComplianceRows(DB.get("users",[]), violations, warnings).map(u=>[u.name,u.empCode,u.dept,u.role,u.complianceScore,u.violations,u.warningCount])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(uRows), "Employees");
-    const wRows=[["Letter ID","Date","Employee","Dept","Case Ref","Type","Severity"],...DB.get("warnings",[]).map(w=>[w.id,w.letterDate,w.empName,w.dept,w.caseId,w.letterType,w.severity])];
+    const wRows=[["Letter ID","Date","Employee","Dept","Case Ref","Type","Severity"],...warnings.map(w=>[w.id,w.letterDate,w.empName,w.dept,w.caseId,w.letterType,w.severity])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wRows), "Warning Letters");
     XLSX.writeFile(wb, `PVMS_BulkExport_${new Date().toISOString().slice(0,10)}.xlsx`);
     toast("Bulk data export complete","success");
@@ -2977,7 +3106,7 @@ function ReportsPage({ user, toast, setPage }) {
                     </td>
                     <td style={{padding:"10px 12px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        <div style={{width:50,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${d.score}%`,background:d.score>85?"var(--green)":d.score>70?"#D97706":"var(--red)"}}/></div>
+                        <div style={{width:50,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div className="progress-fill" style={{width:`${d.score}%`,background:d.score>85?"var(--green)":d.score>70?"#D97706":"var(--red)"}}/></div>
                         <span style={{fontSize:12,fontFamily:"var(--mono)",fontWeight:600,color:d.score>85?"var(--green)":d.score>70?"var(--amber)":"var(--red)"}}>{d.score}</span>
                       </div>
                     </td>
@@ -3022,9 +3151,9 @@ function ReportsPage({ user, toast, setPage }) {
 // ============================================================
 function EmployeesPage({ user }) {
   const violations = DB.get("violations",[]);
-  const warnings = DB.get("warnings",[]);
+  const warnings = reconcileWarningLetters({ persist:false }).warnings;
   const allUsers = DB.get("users",[]);
-  const users = employeeComplianceUsers(allUsers, violations);
+  const users = employeeComplianceRows(allUsers, violations, warnings);
 
   useEffect(() => {
     syncComplianceScores(allUsers, violations);
@@ -3056,9 +3185,10 @@ function EmployeesPage({ user }) {
               </tr>
             </thead>
             <tbody>
+              {users.length===0 && <tr><td colSpan={8}><EmptyState icon="inbox" title="No live employee compliance data" sub="Employees will appear after users or cases are synced from the database"/></td></tr>}
               {[...users].sort((a,b)=>a.complianceScore-b.complianceScore).map((emp,i)=>{
-                const empViol = violations.filter(v=>v.empId===emp.id);
-                const empWarn = warnings.filter(w=>w.empId===emp.id && (!w.caseId || violations.some(v=>v.id===w.caseId)));
+                const empViol = emp.cases || violations.filter(v=>findCaseEmployee(v, allUsers)?.id===emp.id || v.empId===emp.id);
+                const empWarnCount = emp.warningCount ?? warnings.filter(w=>w.empId===emp.id && (!w.caseId || violations.some(v=>v.id===w.caseId))).length;
                 return (
                   <tr key={emp.id} style={{borderBottom:"1px solid var(--line)"}} onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"} onMouseLeave={e=>e.currentTarget.style.background=""}>
                     <td style={{padding:"10px 12px",fontSize:12,fontFamily:"var(--mono)",color:i<3?"var(--red)":"var(--text3)",fontWeight:i<3?700:400,display:"flex",alignItems:"center",gap:4}}>{i<3?<Icon name="star" size={14} color="#D97706"/>:null}{i+1}</td>
@@ -3066,10 +3196,10 @@ function EmployeesPage({ user }) {
                     <td style={{padding:"10px 12px",fontSize:12,color:"var(--text3)"}}>{emp.dept}</td>
                     <td style={{padding:"10px 12px",fontSize:12}}>{emp.designation}</td>
                     <td style={{padding:"10px 12px",fontFamily:"var(--mono)",fontWeight:600,color:empViol.length>3?"var(--red)":empViol.length>1?"var(--amber)":"var(--green)"}}>{empViol.length}</td>
-                    <td style={{padding:"10px 12px"}}>{empWarn.length>0?<span style={{fontSize:12,fontWeight:700,color:"var(--red)"}}>{empWarn.length} warning(s)</span>:<span style={{fontSize:12,color:"var(--green)"}}>None</span>}</td>
+                    <td style={{padding:"10px 12px"}}>{empWarnCount>0?<span style={{fontSize:12,fontWeight:700,color:"var(--red)"}}>{empWarnCount} warning(s)</span>:<span style={{fontSize:12,color:"var(--green)"}}>None</span>}</td>
                     <td style={{padding:"10px 12px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <div style={{width:70,height:6,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${emp.complianceScore}%`,background:scoreColor(emp.complianceScore)}}/></div>
+                        <div style={{width:70,height:6,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div className="progress-fill" style={{width:`${emp.complianceScore}%`,background:scoreColor(emp.complianceScore)}}/></div>
                         <span style={{fontSize:13,fontFamily:"var(--mono)",fontWeight:700,color:scoreColor(emp.complianceScore)}}>{emp.complianceScore}</span>
                       </div>
                     </td>
@@ -4144,7 +4274,7 @@ function caseWarningRecords(violation, warnings = DB.get("warnings", [])) {
     violation.warningLetterId,
     ...(violation.evidence || []).map(ev => ev.warningId)
   ].filter(Boolean);
-  const shouldInfer = violation.warningIssued || inferredIds.length > 0 || !!warningAuditEntry(violation);
+  const shouldInfer = violation.warningIssued || inferredIds.length > 0;
   const inferred = [];
   inferredIds.forEach(id => {
     if (!warningIds.has(id)) {
@@ -4160,6 +4290,28 @@ function caseWarningRecords(violation, warnings = DB.get("warnings", [])) {
     if (warning) inferred.push(warning);
   }
   return [...existing, ...inferred];
+}
+
+function mergedWarningRecords(warnings = DB.get("warnings", []), violations = DB.get("violations", [])) {
+  const byId = new Map();
+  const push = (warning) => {
+    if (!warning?.id) return;
+    byId.set(warning.id, { ...(byId.get(warning.id) || {}), ...warning });
+  };
+  (warnings || []).forEach(push);
+  (violations || []).forEach(violation => caseWarningRecords(violation, warnings).forEach(push));
+  return [...byId.values()].sort((a,b)=>(b.createdAt || 0) - (a.createdAt || 0));
+}
+
+function reconcileWarningLetters(options = {}) {
+  const { persist = true } = options;
+  const violations = DB.get("violations", []);
+  const currentWarnings = DB.get("warnings", []);
+  const warnings = mergedWarningRecords(currentWarnings, violations);
+  if (persist && JSON.stringify(currentWarnings) !== JSON.stringify(warnings)) {
+    DB.set("warnings", warnings);
+  }
+  return { warnings, violations };
 }
 
 function warningIdsForCase(violation, warnings = DB.get("warnings", [])) {
@@ -4312,6 +4464,43 @@ function revokeWarningLettersForCase(violation, user) {
   DB.set("violations", vs);
   syncComplianceScores(DB.get("users", []), vs);
   return { revokedWarnings, rollbackStatus, violations:vs };
+}
+
+function deleteWarningLettersForCase(violation, user, warningId = null) {
+  const allWarnings = DB.get("warnings", []);
+  const targetWarnings = caseWarningRecords(violation, allWarnings).filter(w => !warningId || w.id === warningId);
+  const targetIds = new Set(targetWarnings.map(w => w.id).filter(Boolean));
+  DB.set("warnings", allWarnings.filter(w => !targetIds.has(w.id)));
+
+  const vs = DB.get("violations", []);
+  const idx = vs.findIndex(v => v.id === violation.id);
+  if (idx < 0) return { deletedWarnings:targetWarnings, violations:vs };
+
+  const remainingWarnings = allWarnings.filter(w => w.caseId === violation.id && !targetIds.has(w.id));
+  const remainingWarningIds = new Set(remainingWarnings.map(w => w.id).filter(Boolean));
+  const cleanedEvidence = (vs[idx].evidence || []).filter(ev => {
+    if (ev.warningId) return !targetIds.has(ev.warningId);
+    if (ev.source === "warning-letter") return !!warningId;
+    return true;
+  });
+  const latestRemaining = remainingWarnings.sort((a,b)=>(b.createdAt || 0) - (a.createdAt || 0))[0];
+  const stillHasWarning = remainingWarnings.length > 0 || cleanedEvidence.some(ev => ev.source === "warning-letter" || (ev.warningId && remainingWarningIds.has(ev.warningId)));
+  vs[idx] = {
+    ...vs[idx],
+    evidence:cleanedEvidence,
+    warningIssued:stillHasWarning,
+    warningLetterId:stillHasWarning ? (latestRemaining?.id || vs[idx].warningLetterId) : null,
+    statusBeforeWarningLetter:stillHasWarning ? vs[idx].statusBeforeWarningLetter : null,
+    updatedBy:user?.name || "System",
+    updatedAt:Date.now(),
+    auditLog:[
+      ...(vs[idx].auditLog || []),
+      { action:`Warning letter(s) deleted (${targetWarnings.map(w => w.id).join(", ") || "none"})`, by:user?.name || "System", at:Date.now() }
+    ]
+  };
+  DB.set("violations", vs);
+  syncComplianceScores(DB.get("users", []), vs);
+  return { deletedWarnings:targetWarnings, violations:vs };
 }
 
 function exportDashboardPDF(violations, users) {
@@ -4757,6 +4946,7 @@ function App() {
   useEffect(() => {
     syncStateFromServer().then(() => {
       seedIfEmpty();
+      reconcileWarningLetters();
       syncComplianceScores();
       setNotifications(DB.get("notifications",[]) || []);
       // Re-read user from localStorage after sync in case user data was updated
@@ -4766,6 +4956,7 @@ function App() {
     }).catch(err => {
       console.error("Failed to sync from DB", err);
       seedIfEmpty();
+      reconcileWarningLetters();
       syncComplianceScores();
       setNotifications(DB.get("notifications",[]) || []);
       setDbLoaded(true);
