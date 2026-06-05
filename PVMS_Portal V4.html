@@ -2197,7 +2197,14 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const sev = SEVERITY_CONFIG[violation.severity]||{};
   const warningIdsInEvidence = new Set((violation.evidence || []).map(ev => ev.warningId).filter(Boolean));
   const caseAttachments = [
-    ...(violation.evidence || []).map(ev => ({ ...ev, label:ev.source === "warning-letter" ? "Warning Letter" : "Evidence" })),
+    ...(violation.evidence || []).map(ev => {
+      // Ensure warning-letter evidence items always have a usable URL
+      if ((ev.source === "warning-letter" || ev.warningId) && !ev.url) {
+        const w = caseWarnings.find(cw => cw.id === ev.warningId);
+        if (w && w.attachmentDataUrl) return { ...ev, url: w.attachmentDataUrl, label: "Warning Letter" };
+      }
+      return { ...ev, label: ev.source === "warning-letter" ? "Warning Letter" : "Evidence" };
+    }),
     ...caseWarnings
       .filter(w => !warningIdsInEvidence.has(w.id))
       .map(w => ({ ...warningToEvidenceAttachment(w), label:"Warning Letter" }))
@@ -2238,6 +2245,47 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               </div>
             )}
             {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
+            {user.role === "Master Admin" && caseWarnings.length > 0 && (
+              <Btn size="sm" variant="danger" onClick={() => {
+                if (!window.confirm(`Revoke all warning letters for case ${violation.id}? This will remove the warning letter(s) and roll back the case status.`)) return;
+                const allWarnings = DB.get("warnings", []);
+                const revokedWarnings = allWarnings.filter(w => w.caseId === violation.id);
+                const remainingWarnings = allWarnings.filter(w => w.caseId !== violation.id);
+                DB.set("warnings", remainingWarnings);
+                const vs = DB.get("violations", []);
+                const idx = vs.findIndex(v => v.id === violation.id);
+                if (idx >= 0) {
+                  const cleanedEvidence = (vs[idx].evidence || []).filter(ev => ev.source !== "warning-letter" && !ev.warningId);
+                  const auditLog = vs[idx].auditLog || [];
+                  let rollbackStatus = "Open";
+                  for (let i = auditLog.length - 1; i >= 0; i--) {
+                    const action = auditLog[i].action || "";
+                    if (action.includes("Warning letter")) continue;
+                    const statusMatch = action.match(/Status changed to (.+)/);
+                    if (statusMatch) { rollbackStatus = statusMatch[1]; break; }
+                  }
+                  vs[idx] = {
+                    ...vs[idx],
+                    evidence: cleanedEvidence,
+                    warningIssued: false,
+                    warningLetterId: null,
+                    status: rollbackStatus,
+                    auditLog: [
+                      ...auditLog,
+                      { action: `Warning letter(s) revoked (${revokedWarnings.map(w => w.id).join(", ")})`, by: user.name, at: Date.now() },
+                      { action: `Status rolled back to ${caseStatusLabel(rollbackStatus)}`, by: user.name, at: Date.now() }
+                    ]
+                  };
+                  DB.set("violations", vs);
+                  syncComplianceScores(DB.get("users", []), vs);
+                  setViolations([...vs]);
+                }
+                const logs = DB.get("auditLogs", []);
+                logs.unshift({ id: "al" + Date.now(), ts: Date.now(), user: user.name, role: user.role, action: "WARNING_REVOKED", entity: violation.id, detail: `Revoked ${revokedWarnings.length} warning letter(s) for ${violation.empName || "unknown"}`, ip: "local" });
+                DB.set("auditLogs", logs);
+                toast(`Warning letter(s) revoked for case ${violation.id}`, "success");
+              }} icon={<Icon name="x-circle" size={12}/>}>Revoke Warning</Btn>
+            )}
             {user.role === "Master Admin" && (
               <Btn size="sm" variant="danger" onClick={() => {
                 if (window.confirm("Permanently delete case " + violation.id + "? This cannot be undone.")) {
