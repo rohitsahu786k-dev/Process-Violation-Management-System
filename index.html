@@ -402,6 +402,51 @@ function effectiveCaseStatus(violation) {
   return normalizeCaseStatus(violation?.status);
 }
 
+const CASE_WORKFLOW_STEPS = [
+  { title:"Case Created", note:"On submission" },
+  { title:"HOD Review", note:"Awaiting approval" },
+  { title:"Investigation", note:"After HOD approval" },
+  { title:"CAPA & Closure", note:"After investigation" },
+];
+
+function workflowIndexForCase(violation, isDraftForm=false) {
+  const status = normalizeCaseStatus(violation?.status);
+  if (isDraftForm || status === "Draft") return violation?.id ? 0 : -1;
+  if (status === "Closed") return 4;
+  if (["CAPA Pending","Verification Pending"].includes(status)) return 3;
+  if (status === "Under Investigation" || status === "Overdue") return 2;
+  if (status === "Open") return 1;
+  return violation?.id || violation?.createdAt ? 1 : -1;
+}
+
+function WorkflowTracker({ violation, isDraftForm=false }) {
+  const progress = workflowIndexForCase(violation, isDraftForm);
+  return (
+    <div>
+      {CASE_WORKFLOW_STEPS.map((step,i)=>{
+        const done = progress > i;
+        const current = progress === i;
+        const pending = progress < i;
+        const color = done ? "var(--green)" : current ? "var(--blue)" : "var(--text3)";
+        const bg = done ? "var(--green-bg)" : current ? "var(--blue-l)" : "var(--bg2)";
+        const bd = done ? "var(--green-bd)" : current ? "var(--blue)" : "var(--line)";
+        return (
+          <div key={step.title} style={{display:"flex",gap:10,paddingBottom:i<CASE_WORKFLOW_STEPS.length-1?12:0,position:"relative"}}>
+            {i<CASE_WORKFLOW_STEPS.length-1&&<div style={{position:"absolute",left:11,top:22,bottom:0,width:1,background:done?"var(--green-bd)":"var(--line)"}}/>}
+            <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,background:bg,color,border:`1px solid ${bd}`}}>
+              {done?<Icon name="check" size={12} color="var(--green)"/>:i+1}
+            </div>
+            <div style={{paddingTop:2}}>
+              <div style={{fontSize:12.5,fontWeight:500,color:pending?"var(--text3)":"var(--text)"}}>{step.title}</div>
+              <div style={{fontSize:11,color:"var(--text3)"}}>{current ? "Current stage" : step.note}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const ROLES = ["Master Admin","Management","HOD","Process Dept Rep","User/Employee"];
 const DEPARTMENTS = ["PWS Floor","Admin Interiors-Onepws","WMSPL","CD-Onepws","CR-Onepws","Common-Onepws"];
 const PRODUCT_GROUPS = ["CD-Onepws","CR-Onepws","Admin Interiors-Onepws","Common-Onepws","WMSPL","PWS Floor"];
@@ -532,11 +577,13 @@ const DB = {
   set: (key, val) => {
     try {
       localStorage.setItem("pvms2_" + key, JSON.stringify(val));
-      fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, data: val })
-      }).catch(err => console.error("DB Sync failed", err));
+      if (key !== "currentUser") {
+        fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, data: val })
+        }).catch(err => console.error("DB Sync failed", err));
+      }
     } catch(e) { console.error(e); }
   },
   genId: (prefix) => `${prefix}-${new Date().getFullYear()}-${String((DB.get("seq_"+prefix, 0)||0)+1).padStart(4,"0")}`,
@@ -878,6 +925,46 @@ function ToastContainer({ toasts, dismiss }) {
   );
 }
 
+function downloadDataUrl(dataUrl, filename="document.pdf") {
+  if (!dataUrl) return;
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function WarningLetterModal({ letter, onClose }) {
+  if (!letter) return null;
+  const fileName = letter.attachmentName || `${letter.id || "WarningLetter"}.pdf`;
+  const dataUrl = letter.attachmentDataUrl;
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,.55)",zIndex:5000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+      <div style={{width:"min(980px,96vw)",height:"min(760px,92vh)",background:"#FFFFFF",borderRadius:"var(--r2)",boxShadow:"var(--sh2)",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"12px 16px",borderBottom:"1px solid var(--line)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:600,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{letter.letterType || "Warning Letter"}</div>
+            <div style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--mono)"}}>{letter.id}  {letter.caseId}</div>
+          </div>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <Btn size="sm" onClick={()=>dataUrl && window.open(dataUrl, "_blank")} icon={<Icon name="eye" size={12}/>}>Open</Btn>
+            <Btn size="sm" variant="primary" onClick={()=>downloadDataUrl(dataUrl, fileName)} icon={<Icon name="download" size={12} color="#fff"/>}>Download</Btn>
+            <Btn size="sm" ghost onClick={onClose} icon={<Icon name="x" size={12}/>}>Close</Btn>
+          </div>
+        </div>
+        <div style={{flex:1,background:"var(--bg2)"}}>
+          {dataUrl ? (
+            <iframe title="Warning letter preview" src={dataUrl} style={{width:"100%",height:"100%",border:0,background:"#FFFFFF"}}/>
+          ) : (
+            <EmptyState icon="file" title="Preview unavailable" sub="Generate the PDF again to refresh this attachment"/>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============================================================
 // LOGIN PAGE
 // ============================================================
@@ -1137,9 +1224,22 @@ function Topbar({ page, user, notifications, setPage, onLogout }) {
   const [notifs, setNotifs] = useState(notifications);
   const unread = notifs.filter(n=>!n.read).length;
   const BREADCRUMBS = {
-    dashboard:"PVMS / Dashboard",cases:"PVMS / Case Management / All Cases",newcase:"PVMS / Case Management / Register Violation",investigation:"PVMS / Case Management / Investigation & CAPA",disciplinary:"PVMS / Disciplinary / Actions",warning:"PVMS / Disciplinary / Warning Letters",reports:"PVMS / Analytics / Reports & MIS",employees:"PVMS / Analytics / Employee Compliance",medialibrary:"PVMS / Administration / Media Library",masters:"PVMS / Administration / Master Data",email:"PVMS / Administration / Email Integration",audit:"PVMS / Administration / Audit Trail",users:"PVMS / Administration / User Management"
+    dashboard:[["PVMS","dashboard"],["Dashboard","dashboard"]],
+    cases:[["PVMS","dashboard"],["Case Management","cases"],["All Cases","cases"]],
+    viewcase:[["PVMS","dashboard"],["Case Management","cases"],["All Cases","cases"],["Case Details","viewcase"]],
+    newcase:[["PVMS","dashboard"],["Case Management","cases"],["Register Violation","newcase"]],
+    investigation:[["PVMS","dashboard"],["Case Management","cases"],["Investigation & CAPA","investigation"]],
+    disciplinary:[["PVMS","dashboard"],["Disciplinary","disciplinary"],["Disciplinary Actions","disciplinary"]],
+    warning:[["PVMS","dashboard"],["Disciplinary","disciplinary"],["Warning Letters","warning"]],
+    reports:[["PVMS","dashboard"],["Analytics","reports"],["Reports & MIS","reports"]],
+    employees:[["PVMS","dashboard"],["Analytics","reports"],["Employee Compliance","employees"]],
+    medialibrary:[["PVMS","dashboard"],["Administration","masters"],["Media Library","medialibrary"]],
+    masters:[["PVMS","dashboard"],["Administration","masters"],["Master Data","masters"]],
+    email:[["PVMS","dashboard"],["Administration","masters"],["Email Integration","email"]],
+    audit:[["PVMS","dashboard"],["Administration","masters"],["Audit Trail","audit"]],
+    users:[["PVMS","dashboard"],["Administration","masters"],["User Management","users"]]
   };
-  const bc = (BREADCRUMBS[page]||"PVMS").split(" / ");
+  const bc = BREADCRUMBS[page] || [["PVMS","dashboard"]];
 
   const markAll = () => {
     const updated = notifs.map(n=>({...n,read:true}));
@@ -1150,10 +1250,14 @@ function Topbar({ page, user, notifications, setPage, onLogout }) {
   return (
     <div style={{background:"#FFFFFF",borderBottom:"1px solid #E5E7EB",padding:"0 20px",height:50,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,position:"relative",zIndex:100}}>
       <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#6B7280"}}>
-        {bc.map((s,i)=>(
+        {bc.map(([s,target],i)=>(
           <span key={i} style={{display:"flex",alignItems:"center",gap:5}}>
             {i>0&&<span style={{color:"#D1D5DB",display:"flex"}}><Icon name="chevron-right" size={12}/></span>}
-            <span style={{color:i===bc.length-1?"#1F2937":"#6B7280",fontWeight:i===bc.length-1?500:400}}>{s}</span>
+            <button
+              onClick={()=>i!==bc.length-1 && target && setPage(target)}
+              disabled={i===bc.length-1 || !target}
+              style={{background:"none",border:"none",padding:0,color:i===bc.length-1?"#1F2937":"#6B7280",fontWeight:i===bc.length-1?500:400,cursor:i===bc.length-1?"default":"pointer",fontSize:12}}
+            >{s}</button>
           </span>
         ))}
       </div>
@@ -1853,13 +1957,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
           <Card>
             <CardHeader title="Workflow"/>
             <div style={{padding:14}}>
-              {["Case Created","HOD Review","Investigation","CAPA & Closure"].map((s,i)=>(
-                <div key={s} style={{display:"flex",gap:10,paddingBottom:i<3?12:0,position:"relative"}}>
-                  {i<3&&<div style={{position:"absolute",left:11,top:22,bottom:0,width:1,background:"var(--line)"}}/>}
-                  <div style={{width:22,height:22,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,background:i===0?"var(--green-bg)":"var(--bg2)",color:i===0?"var(--green)":"var(--text3)",border:`1px solid ${i===0?"var(--green-bd)":"var(--line)"}`}}>{i===0?<Icon name="check" size={12} color="var(--green)"/>:i+1}</div>
-                  <div style={{paddingTop:2}}><div style={{fontSize:12.5,fontWeight:500,color:i===0?"var(--text)":"var(--text3)"}}>{s}</div><div style={{fontSize:11,color:"var(--text3)"}}>{i===0?"On submission":i===1?"Awaiting approval":i===2?"After HOD approval":"After investigation"}</div></div>
-                </div>
-              ))}
+              <WorkflowTracker violation={form} isDraftForm={!isEdit && !form.status}/>
             </div>
           </Card>
         </div>
@@ -1882,6 +1980,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const [newCapa, setNewCapa] = useState({type:"Corrective",description:"",ownerId:"",owner:"",ownerEmail:"",dueDate:"",status:"Open"});
   const [showCapaForm, setShowCapaForm] = useState(false);
   const [investigatorRemarks, setInvestigatorRemarks] = useState(violation.investigatorRemarks||"");
+  const [letterPreview, setLetterPreview] = useState(null);
 
   const canEdit = ["Master Admin","HOD","Management"].includes(user.role);
   const users = DB.get("users",[]);
@@ -1914,7 +2013,14 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
     const updated = [...(violation.capaActions||[]), action];
-    updateCase({capaActions:updated});
+    const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closed"].includes(normalizeCaseStatus(violation.status));
+    updateCase({
+      capaActions:updated,
+      ...(shouldAdvanceStatus ? {
+        status:"CAPA Pending",
+        auditLog:[...(violation.auditLog||[]), { action:"CAPA initiated", by:user.name, at:Date.now() }]
+      } : {})
+    });
     setNewCapa({type:"Corrective",description:"",ownerId:"",owner:"",ownerEmail:"",dueDate:"",status:"Open"});
     setShowCapaForm(false);
     toast("CAPA action added","success");
@@ -1948,6 +2054,30 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   };
 
   const sev = SEVERITY_CONFIG[violation.severity]||{};
+  const warningIdsInEvidence = new Set((violation.evidence || []).map(ev => ev.warningId).filter(Boolean));
+  const caseAttachments = [
+    ...(violation.evidence || []).map(ev => ({ ...ev, label:ev.source === "warning-letter" ? "Warning Letter" : "Evidence" })),
+    ...caseWarnings
+      .filter(w => !warningIdsInEvidence.has(w.id))
+      .map(w => ({ ...warningToEvidenceAttachment(w), label:"Warning Letter" }))
+  ];
+
+  const openWarningPreview = (warning) => {
+    const prepared = prepareWarningPreview(warning, DB.get("violations", []), user, toast);
+    if (!prepared) return;
+    setLetterPreview(prepared);
+    setViolations([...DB.get("violations",[])]);
+  };
+
+  const openCaseAttachment = (attachment) => {
+    if (attachment.source === "warning-letter" || attachment.warningId) {
+      const warning = DB.get("warnings", []).find(w => w.id === attachment.warningId) || caseWarnings.find(w => w.id === attachment.warningId);
+      if (warning) openWarningPreview(warning);
+      return;
+    }
+    if (attachment.url) window.open(attachment.url, "_blank");
+    else toast("Attachment link is unavailable", "error");
+  };
 
   return (
     <div>
@@ -2096,6 +2226,32 @@ function ViewCasePage({ user, toast, setPage, editId }) {
             </div>
           </Card>
 
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Workflow"/>
+            <div style={{padding:14}}>
+              <WorkflowTracker violation={violation}/>
+            </div>
+          </Card>
+
+          <Card style={{marginBottom:14}}>
+            <CardHeader title="Attachments"/>
+            <div style={{padding:caseAttachments.length?10:0}}>
+              {!caseAttachments.length && <EmptyState icon="inbox" title="No attachments" sub="Evidence and warning letters will appear here"/>}
+              {caseAttachments.map((att,i)=>(
+                <div key={att.id || att.warningId || i} style={{display:"flex",alignItems:"center",gap:8,justifyContent:"space-between",padding:"7px 8px",borderBottom:i<caseAttachments.length-1?"1px solid var(--line)":"none"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                    <Icon name={att.type === "video" ? "video" : att.type === "image" ? "image" : "file"} size={14}/>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{att.name || att.attachmentName || "Attachment"}</div>
+                      <div style={{fontSize:10,color:"var(--text3)"}}>{att.label || "Attachment"}</div>
+                    </div>
+                  </div>
+                  <Btn size="sm" ghost onClick={()=>openCaseAttachment(att)} icon={<Icon name="eye" size={12}/>}>View</Btn>
+                </div>
+              ))}
+            </div>
+          </Card>
+
           {/* Disciplinary Suggestion */}
           <Card style={{marginBottom:14}}>
             <CardHeader title="Disciplinary Recommendation"/>
@@ -2126,7 +2282,11 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                     <Btn variant="primary" style={{width:"100%",justifyContent:"center"}} onClick={()=>{
                       const violations = DB.get("violations",[]);
                       const v = violations.find(x=>x.id===editId);
-                      if(v && issueWarningLetter(v, user, toast)) setViolations([...DB.get("violations",[])]);
+                      const newWarning = v && issueWarningLetter(v, user, toast, "Warning Letter Level-1", "HOD + HR Manager", { download:false });
+                      if(newWarning) {
+                        setLetterPreview(newWarning);
+                        setViolations([...DB.get("violations",[])]);
+                      }
                     }}> Generate & Attach Warning Letter</Btn>
                   </>
                 )}
@@ -2139,13 +2299,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                           <div style={{fontSize:12,fontWeight:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w.letterType}</div>
                           <div style={{fontSize:10,color:"var(--text3)",fontFamily:"var(--mono)"}}>{w.id}  {w.letterDate}</div>
                         </div>
-                        <Btn size="sm" ghost onClick={()=>{
-                          if (w.attachmentDataUrl) window.open(w.attachmentDataUrl, "_blank");
-                          else {
-                            const v = DB.get("violations",[]).find(x=>x.id===w.caseId);
-                            if(v) generateWarningPDF(v, user, toast, w.letterType);
-                          }
-                        }} icon={<Icon name="eye" size={12}/>}>View</Btn>
+                        <Btn size="sm" ghost onClick={()=>openWarningPreview(w)} icon={<Icon name="eye" size={12}/>}>View</Btn>
                       </div>
                     ))}
                   </div>
@@ -2155,6 +2309,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
           )}
         </div>
       </div>
+      <WarningLetterModal letter={letterPreview} onClose={()=>setLetterPreview(null)}/>
     </div>
   );
 }
@@ -2294,6 +2449,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
   const [selectedCase, setSelectedCase] = useState("");
   const [letterType, setLetterType] = useState("Warning Letter Level-1");
   const [issuer, setIssuer] = useState("HOD + HR Manager");
+  const [letterPreview, setLetterPreview] = useState(null);
 
   const allViolations = DB.get("violations",[]);
   const availableCases = allViolations.filter(v=>v.status!=="Draft" && v.status!=="Rejected");
@@ -2301,10 +2457,25 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
   const generateLetter = () => {
     const violation = allViolations.find(v=>v.id===selectedCase);
     if (!violation) { toast("Please select a case","error"); return; }
-    const newW = issueWarningLetter(violation, user, toast, letterType, issuer);
+    const newW = issueWarningLetter(violation, user, toast, letterType, issuer, { download:false });
     if (!newW) return;
     setWarnings([...DB.get("warnings",[])]);
+    setLetterPreview(newW);
     setShowNew(false);
+  };
+
+  const openWarningPreview = (warning) => {
+    const prepared = prepareWarningPreview(warning, allViolations, user, toast);
+    if (!prepared) return;
+    setWarnings([...DB.get("warnings",[])]);
+    setLetterPreview(prepared);
+  };
+
+  const downloadWarning = (warning) => {
+    const prepared = prepareWarningPreview(warning, allViolations, user, toast);
+    if (!prepared) return;
+    setWarnings([...DB.get("warnings",[])]);
+    downloadDataUrl(prepared.attachmentDataUrl, prepared.attachmentName || `${prepared.id}.pdf`);
   };
 
   return (
@@ -2331,7 +2502,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
               <Select value={issuer} onChange={setIssuer} options={["HOD + HR Manager","GM Operations","CHRO + HOD","Management Committee"]}/>
             </FormGroup>
             <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
-              <Btn variant="primary" onClick={generateLetter}> Generate & Download PDF</Btn>
+              <Btn variant="primary" onClick={generateLetter}> Generate & Preview</Btn>
               <Btn onClick={()=>setShowNew(false)}>Cancel</Btn>
             </div>
           </div>
@@ -2363,17 +2534,8 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
                   <td style={{padding:"9px 12px"}}><span style={{fontSize:11,background:"var(--green-bg)",color:"var(--green)",padding:"2px 8px",borderRadius:10,fontWeight:500}}> {w.status}</span></td>
                   <td style={{padding:"9px 12px"}}>
                     <div style={{display:"flex",gap:6,flexWrap:"nowrap"}}>
-                      <Btn size="sm" variant="primary" onClick={()=>{
-                        if (w.attachmentDataUrl) window.open(w.attachmentDataUrl, "_blank");
-                        else {
-                          const v = allViolations.find(x=>x.id===w.caseId);
-                          if(v) generateWarningPDF(v, user, toast, w.letterType);
-                        }
-                      }} icon={<Icon name="eye" size={12} color="#fff"/>}>View</Btn>
-                      <Btn size="sm" onClick={()=>{
-                        const v = allViolations.find(x=>x.id===w.caseId);
-                        if(v) generateWarningPDF(v, user, toast, w.letterType);
-                      }} icon={<Icon name="download" size={12}/>}>PDF</Btn>
+                      <Btn size="sm" variant="primary" onClick={()=>openWarningPreview(w)} icon={<Icon name="eye" size={12} color="#fff"/>}>View</Btn>
+                      <Btn size="sm" onClick={()=>downloadWarning(w)} icon={<Icon name="download" size={12}/>}>PDF</Btn>
                     </div>
                   </td>
                 </tr>
@@ -2382,6 +2544,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
           </table>
         </div>
       </Card>
+      <WarningLetterModal letter={letterPreview} onClose={()=>setLetterPreview(null)}/>
     </div>
   );
 }
@@ -2389,7 +2552,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
 // ============================================================
 // REPORTS PAGE
 // ============================================================
-function ReportsPage({ user, toast }) {
+function ReportsPage({ user, toast, setPage }) {
   const violations = DB.get("violations",[]);
   const users = employeeComplianceUsers(DB.get("users",[]), violations);
 
@@ -3006,7 +3169,7 @@ function UsersPage({ user, toast }) {
   const [form, setForm]         = useState({ name:"", email:"", empCode:"", dept:"", role:"User/Employee", designation:"", active:true });
   const [search, setSearch]     = useState("");
   const [saving, setSaving]     = useState(false);
-  const [resettingUserId, setResettingUserId] = useState(null);
+  const [invitingUserId, setInvitingUserId] = useState(null);
 
   // Permission matrix  stored in DB so Master Admin can edit
   const DEFAULT_MATRIX = [
@@ -3072,12 +3235,7 @@ function UsersPage({ user, toast }) {
         setShowForm(false); setEditUser(null);
         setForm({name:"",email:"",empCode:"",dept:"",role:"User/Employee",designation:"",active:true});
         if (createdUser) {
-          try {
-            await requestUserInviteEmail(createdUser, user.name || "Master Admin", initialPassword);
-            toast(`User ${createdUser.name} created and invite email sent`,"success");
-          } catch (inviteErr) {
-            toast(`User ${createdUser.name} created, but invite email failed`,"warning");
-          }
+          toast(`User ${createdUser.name} created. Click Invite to send the login email.`,"success");
         } else {
           toast(`User ${form.name} updated`,"success");
         }
@@ -3104,16 +3262,25 @@ function UsersPage({ user, toast }) {
     toast("User status updated","success");
   };
 
-  const sendResetEmail = async (targetUser) => {
+  const sendInviteEmail = async (targetUser) => {
     if (!targetUser?.email) { toast("User email missing", "error"); return; }
-    setResettingUserId(targetUser.id);
+    setInvitingUserId(targetUser.id);
     try {
-      await requestPasswordResetEmail(targetUser.email, user.name || "Master Admin");
-      toast(`Password reset link sent to ${targetUser.email}`, "success");
+      const current = DB.get("users", []);
+      const idx = current.findIndex(u => u.id === targetUser.id);
+      const invitePassword = targetUser.password || targetUser.temporaryPassword || targetUser.tempPassword || generatePortalPassword();
+      const inviteUser = { ...(idx >= 0 ? current[idx] : targetUser), password:invitePassword, mustChangePassword:true };
+      await requestUserInviteEmail(inviteUser, user.name || "Master Admin", invitePassword);
+      if (idx >= 0) {
+        const updated = current.map((u,i) => i === idx ? { ...u, password:invitePassword, mustChangePassword:true, inviteSentAt:Date.now(), inviteSentBy:user.name || "Master Admin" } : u);
+        const syncedUsers = syncComplianceScores(updated, DB.get("violations",[]), true);
+        setUsers([...syncedUsers]);
+      }
+      toast(`Invite email sent to ${targetUser.email}`, "success");
     } catch (err) {
-      toast(err.message || "Password reset email failed", "error");
+      toast(err.message || "Invite email failed", "error");
     } finally {
-      setResettingUserId(null);
+      setInvitingUserId(null);
     }
   };
 
@@ -3162,7 +3329,6 @@ function UsersPage({ user, toast }) {
       const rows = XLSX.utils.sheet_to_json(sheet, { defval:"" });
       const current = DB.get("users", []);
       let added = 0, updated = 0;
-      const inviteTargets = [];
       rows.forEach((row, index) => {
         const email = String(row.EmailID || "").trim().toLowerCase();
         const name = String(row.SPOCName || "").trim();
@@ -3194,20 +3360,12 @@ function UsersPage({ user, toast }) {
         } else {
           const newUser = { id:"u" + Date.now() + index, ...record };
           current.push(newUser);
-          inviteTargets.push({ user:newUser, password:initialPassword });
           added++;
         }
       });
       const syncedUsers = syncComplianceScores(current, DB.get("violations",[]), true);
       setUsers([...syncedUsers]);
-      if (inviteTargets.length) {
-        const results = await Promise.allSettled(inviteTargets.map(item => requestUserInviteEmail(item.user, user.name || "Master Admin", item.password)));
-        const sent = results.filter(r => r.status === "fulfilled").length;
-        const failed = results.length - sent;
-        toast(`Employee import complete: ${added} added, ${updated} updated, ${sent} invite(s) sent${failed ? `, ${failed} failed` : ""}`, failed ? "warning" : "success");
-      } else {
-        toast(`Employee import complete: ${added} added, ${updated} updated`, "success");
-      }
+      toast(`Employee import complete: ${added} added, ${updated} updated. Use Invite to send login emails.`, "success");
     } catch (err) {
       toast("Unable to import employee file", "error");
     } finally {
@@ -3314,7 +3472,7 @@ function UsersPage({ user, toast }) {
                         <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
                           <Btn size="sm" onClick={()=>openEdit(u)} icon={<Icon name="edit" size={12}/>}>Edit</Btn>
                           <Btn size="sm" ghost onClick={()=>toggleActive(u.id)}>{u.active!==false?"Disable":"Enable"}</Btn>
-                          {u.id!=="u1" && <Btn size="sm" ghost onClick={()=>sendResetEmail(u)} loading={resettingUserId===u.id} icon={<Icon name="lock" size={12}/>}>Pwd</Btn>}
+                          {u.id!=="u1" && <Btn size="sm" ghost onClick={()=>sendInviteEmail(u)} loading={invitingUserId===u.id} icon={<Icon name="mail" size={12}/>}>Invite</Btn>}
                           {u.id!=="u1" && <Btn size="sm" variant="danger" onClick={()=>{setDelUser(u.id);setShowForm(false);}} icon={<Icon name="trash" size={12} color="#fff"/>}>Delete</Btn>}
                         </div>
                       )}
@@ -3588,6 +3746,54 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   return { filename, dataUrl };
 }
 
+function warningToEvidenceAttachment(warning) {
+  return {
+    id:`att-${warning.id}`,
+    name:warning.attachmentName || `${warning.id}.pdf`,
+    url:warning.attachmentDataUrl || "",
+    type:"document",
+    fileType:"document",
+    source:"warning-letter",
+    warningId:warning.id,
+    caseId:warning.caseId,
+    createdAt:warning.createdAt || Date.now()
+  };
+}
+
+function upsertWarningAttachmentOnCase(warning, byName="System") {
+  if (!warning?.caseId) return;
+  const violations = DB.get("violations", []);
+  const idx = violations.findIndex(v => v.id === warning.caseId);
+  if (idx < 0) return;
+  const existingEvidence = violations[idx].evidence || [];
+  const withoutOld = existingEvidence.filter(ev => ev.warningId !== warning.id);
+  const auditLog = violations[idx].auditLog || [];
+  const alreadyLogged = auditLog.some(entry => String(entry.action || "").includes(warning.id));
+  violations[idx] = {
+    ...violations[idx],
+    warningIssued:true,
+    warningLetterId:warning.id,
+    evidence:[...withoutOld, warningToEvidenceAttachment(warning)],
+    auditLog:alreadyLogged ? auditLog : [...auditLog, { action:`Warning letter attached (${warning.id})`, by:byName, at:Date.now() }]
+  };
+  DB.set("violations", violations);
+}
+
+function prepareWarningPreview(warning, allViolations, user, toast) {
+  if (!warning) return null;
+  let next = warning;
+  if (!next.attachmentDataUrl) {
+    const violation = allViolations.find(v => v.id === next.caseId);
+    if (!violation) { toast("Linked case not found for this warning letter", "error"); return null; }
+    const attachment = generateWarningPDF(violation, user, toast, next.letterType, { download:false, toast:false });
+    if (!attachment) return null;
+    next = { ...next, attachmentName:attachment.filename, attachmentDataUrl:attachment.dataUrl };
+    DB.set("warnings", DB.get("warnings", []).map(w => w.id === next.id ? next : w));
+  }
+  upsertWarningAttachmentOnCase(next, user?.name || "System");
+  return next;
+}
+
 function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Letter Level-1", issuer="HOD + HR Manager", options={}) {
   const attachment = generateWarningPDF(violation, issuedBy, toast, letterType, { download: options.download !== false, toast:false });
   if (!attachment) return null;
@@ -3621,10 +3827,13 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
   const violations = DB.get("violations", []);
   const idx = violations.findIndex(v => v.id === violation.id);
   if (idx >= 0) {
+    const existingEvidence = violations[idx].evidence || [];
+    const withoutOld = existingEvidence.filter(ev => ev.warningId !== newW.id);
     violations[idx] = {
       ...violations[idx],
       warningIssued:true,
       warningLetterId:newW.id,
+      evidence:[...withoutOld, warningToEvidenceAttachment(newW)],
       auditLog:[...(violations[idx].auditLog || []), { action:`Warning letter issued (${letterType})`, by:issuedBy?.name || "System", at:Date.now() }]
     };
     DB.set("violations", violations);
