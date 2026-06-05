@@ -420,17 +420,38 @@ function normalizeCaseStatus(status) {
 }
 
 function caseStatusLabel(status) {
-  const normalized = normalizeCaseStatus(status);
+  const normalized = caseStatusValue(status);
   return CASE_STATUS_OPTIONS.find(s => s.value === normalized)?.label || STATUS_CONFIG[normalized]?.label || normalized;
 }
 
+function caseStatusValue(status) {
+  const raw = String(status || "").trim();
+  if (!raw) return "Open";
+  const normalized = normalizeCaseStatus(raw);
+  if (CASE_STATUS_OPTIONS.some(s => s.value === normalized) || STATUS_CONFIG[normalized]) return normalized;
+  const fromOptionLabel = CASE_STATUS_OPTIONS.find(s => s.label === raw);
+  if (fromOptionLabel) return fromOptionLabel.value;
+  const fromConfigLabel = Object.entries(STATUS_CONFIG).find(([, cfg]) => cfg.label === raw);
+  return normalizeCaseStatus(fromConfigLabel?.[0] || raw);
+}
+
+function normalizeSeverity(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (SEVERITY_CONFIG[raw]) return raw;
+  const exact = Object.keys(SEVERITY_CONFIG).find(s => s.toLowerCase() === raw.toLowerCase());
+  if (exact) return exact;
+  return Object.keys(SEVERITY_CONFIG).find(s => raw.toLowerCase().includes(s.toLowerCase())) || "";
+}
+
 function isCaseDateOverdue(violation) {
-  return violation?.dueDate && new Date(violation.dueDate) < new Date() && !["Closed","Rejected","Archived"].includes(violation.status);
+  const status = caseStatusValue(violation?.status);
+  return violation?.dueDate && new Date(violation.dueDate) < new Date() && !["Closed","Rejected","Archived"].includes(status);
 }
 
 function effectiveCaseStatus(violation) {
   if (violation?.status === "Overdue" || isCaseDateOverdue(violation)) return "Overdue";
-  return normalizeCaseStatus(violation?.status);
+  return caseStatusValue(violation?.status);
 }
 
 const CASE_WORKFLOW_STEPS = [
@@ -441,7 +462,7 @@ const CASE_WORKFLOW_STEPS = [
 ];
 
 function workflowIndexForCase(violation, isDraftForm=false) {
-  const status = normalizeCaseStatus(violation?.status);
+  const status = caseStatusValue(violation?.status);
   if (isDraftForm || status === "Draft") return violation?.id ? 0 : -1;
   if (status === "Closed") return 4;
   if (["CAPA Pending","Verification Pending"].includes(status)) return 3;
@@ -690,7 +711,7 @@ function isComplianceUser(user) {
 }
 
 function isComplianceScoredCase(violation) {
-  const status = normalizeCaseStatus(violation?.status);
+  const status = caseStatusValue(violation?.status);
   return violation && !["Draft", "Rejected", "Archived"].includes(status);
 }
 
@@ -727,7 +748,8 @@ function syncComplianceScores(users = DB.get("users", []), violations = DB.get("
 }
 
 function casePenalty(violation) {
-  return Math.abs(SEVERITY_CONFIG[violation?.severity]?.score || 0);
+  const severity = normalizeSeverity(violation?.severity);
+  return Math.abs(SEVERITY_CONFIG[severity]?.score || 0);
 }
 
 function departmentComplianceScore(violations = []) {
@@ -770,8 +792,9 @@ const useApp = () => useContext(AppContext);
 // ============================================================
 function Badge({ status, severity, custom }) {
   let cfg;
-  if (severity) cfg = SEVERITY_CONFIG[severity] ? { color: SEVERITY_CONFIG[severity].color, bg: SEVERITY_CONFIG[severity].bg } : null;
-  else if (status) cfg = STATUS_CONFIG[status];
+  const normalizedSeverity = normalizeSeverity(severity);
+  if (severity) cfg = SEVERITY_CONFIG[normalizedSeverity] ? { color: SEVERITY_CONFIG[normalizedSeverity].color, bg: SEVERITY_CONFIG[normalizedSeverity].bg, label:normalizedSeverity } : null;
+  else if (status) cfg = STATUS_CONFIG[caseStatusValue(status)];
   else if (custom) cfg = custom;
   if (!cfg) return <span style={{fontSize:11,color:"var(--text3)"}}>{status||severity}</span>;
   return (
@@ -1273,8 +1296,8 @@ function Sidebar({ active, setPage, user, notifCount }) {
   const [collapsed, setCollapsed] = useState(false);
   const w = collapsed ? 52 : 232;
   const violations = DB.get("violations", []);
-  const caseCount = violations.filter(v => !["Closed","Rejected","Archived"].includes(v.status)).length;
-  const investigationCount = violations.filter(v => ["Under Investigation","CAPA Pending","Verification Pending"].includes(v.status)).length;
+  const caseCount = violations.filter(v => !["Closed","Rejected","Archived"].includes(caseStatusValue(v.status))).length;
+  const investigationCount = violations.filter(v => ["Under Investigation","CAPA Pending","Verification Pending"].includes(caseStatusValue(v.status))).length;
 
   return (
     <nav style={{width:w,background:"#FFFFFF",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",overflowX:"hidden",transition:"width .2s ease",height:"100vh",position:"relative"}}>
@@ -1441,15 +1464,15 @@ function DashboardPage({ user, setPage }) {
   const users = withComplianceScores(DB.get("users",[]), violations);
 
   const total = violations.length;
-  const open = violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length;
-  const closed = violations.filter(v=>v.status==="Closed").length;
+  const open = violations.filter(v=>!["Closed","Rejected"].includes(caseStatusValue(v.status))).length;
+  const closed = violations.filter(v=>caseStatusValue(v.status)==="Closed").length;
   const overdue = violations.filter(v=>{
-    if(["Closed","Rejected"].includes(v.status)) return false;
+    if(["Closed","Rejected"].includes(caseStatusValue(v.status))) return false;
     return v.dueDate && new Date(v.dueDate) < new Date();
   }).length;
-  const critical = violations.filter(v=>v.severity==="Critical"&&v.status!=="Closed").length;
+  const critical = violations.filter(v=>normalizeSeverity(v.severity)==="Critical"&&caseStatusValue(v.status)!=="Closed").length;
   const repeats = violations.filter(v=>v.repeatViolation).length;
-  const capaPending = violations.filter(v=>v.status==="CAPA Pending"||v.status==="Verification Pending").length;
+  const capaPending = violations.filter(v=>caseStatusValue(v.status)==="CAPA Pending"||caseStatusValue(v.status)==="Verification Pending").length;
   const complianceUsers = users.filter(isComplianceUser);
   const avgScore = complianceUsers.reduce((a,b)=>a+b.complianceScore,0) / Math.max(complianceUsers.length,1);
 
@@ -1462,7 +1485,10 @@ function DashboardPage({ user, setPage }) {
   const topCats = Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).slice(0,6);
 
   const sevCounts = {Minor:0,Moderate:0,Major:0,Critical:0};
-  violations.forEach(v=>{if(sevCounts[v.severity]!==undefined)sevCounts[v.severity]++});
+  violations.forEach(v=>{
+    const severity = normalizeSeverity(v.severity);
+    if(sevCounts[severity]!==undefined) sevCounts[severity]++;
+  });
 
   const monthCounts = Array(6).fill(0);
   const now = new Date();
@@ -1643,7 +1669,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
       const ov = effectiveCaseStatus(v) === "Overdue";
       if (!ov) return false;
     } else if (filterTab !== "All") {
-      if (normalizeCaseStatus(v.status) !== filterTab) return false;
+      if (caseStatusValue(v.status) !== filterTab) return false;
     }
     if (filterDept && v.dept !== filterDept) return false;
     if (filterSev && v.severity !== filterSev) return false;
@@ -1664,7 +1690,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
     const vs = DB.get("violations",[]);
     const idx = vs.findIndex(v=>v.id===id);
     if (idx >= 0) {
-      const nextStatus = normalizeCaseStatus(status);
+      const nextStatus = caseStatusValue(status);
       vs[idx].status = nextStatus;
       vs[idx].auditLog = vs[idx].auditLog || [];
       vs[idx].auditLog.push({ action:`Status changed to ${caseStatusLabel(nextStatus)}`, by:user.name, at:Date.now() });
@@ -1705,7 +1731,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
 
   return (
     <div>
-      <PageHeader title="All Cases" sub={`${violations.length} total violations  ${violations.filter(v=>!["Closed","Rejected","Archived"].includes(v.status)).length} open`}
+      <PageHeader title="All Cases" sub={`${violations.length} total violations  ${violations.filter(v=>!["Closed","Rejected","Archived"].includes(caseStatusValue(v.status))).length} open`}
         actions={
           <>
             <Btn size="sm" icon={<Icon name="download" size={14}/>} onClick={exportExcel}>Export Excel</Btn>
@@ -1753,8 +1779,8 @@ function CasesPage({ user, setPage, setEditId, toast }) {
                     <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:statusForDisplay==="Overdue"?"var(--red)":"var(--text3)",whiteSpace:"nowrap"}}>{v.dueDate||""}</td>
                     <td style={{padding:"9px 12px"}}>
                       <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
-                        {canApprove && normalizeCaseStatus(v.status)==="Open" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Investigate</Btn>}
-                        {canApprove && v.status==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Closed")}>Close</Btn>}
+                        {canApprove && caseStatusValue(v.status)==="Open" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Investigate</Btn>}
+                        {canApprove && caseStatusValue(v.status)==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Closed")}>Close</Btn>}
                         <Btn size="sm" ghost onClick={()=>{setEditId(v.id);setPage("viewcase")}}>View</Btn>
                         {canDeleteCase && <Btn size="sm" variant="danger" onClick={()=>deleteCase(v.id)} icon={<Icon name="trash" size={12}/>}>Delete</Btn>}
                       </div>
@@ -1893,7 +1919,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
 
   const changeEditStatus = (status) => {
     if (!canManageCaseStatus) return;
-    const normalized = normalizeCaseStatus(status);
+    const normalized = caseStatusValue(status);
     const violations = DB.get("violations",[]);
     const idx = violations.findIndex(v=>v.id===editId);
     if (idx < 0) { toast("Case not found", "error"); return; }
@@ -1919,7 +1945,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
             {canManageCaseStatus && (
               <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center",maxWidth:680}}>
                 {CASE_STATUS_OPTIONS.map(s=>(
-                  <Btn key={s.value} size="sm" variant={normalizeCaseStatus(form.status)===s.value?"primary":s.value==="Closed"?"success":s.value==="Overdue"?"danger":"default"}
+                  <Btn key={s.value} size="sm" variant={caseStatusValue(form.status)===s.value?"primary":s.value==="Closed"?"success":s.value==="Overdue"?"danger":"default"}
                     onClick={()=>changeEditStatus(s.value)}
                   >{s.label}</Btn>
                 ))}
@@ -2132,7 +2158,8 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
   const registeredUsers = activeRegisteredUsers(users);
   const registeredUserOptions = registeredUsers.map(u => ({ value:u.id, label:registeredUserOptionLabel(u) }));
-  const caseWarnings = DB.get("warnings",[]).filter(w=>w.caseId===violation.id);
+  const caseWarnings = caseWarningRecords(violation);
+  const hasWarningLetter = caseWarnings.length > 0 || violation.warningIssued || !!violation.warningLetterId;
 
   const updateCase = (updates) => {
     const vs = DB.get("violations",[]);
@@ -2154,7 +2181,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
     const updated = [...(violation.capaActions||[]), action];
-    const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closed"].includes(normalizeCaseStatus(violation.status));
+    const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closed"].includes(caseStatusValue(violation.status));
     updateCase({
       capaActions:updated,
       ...(shouldAdvanceStatus ? {
@@ -2168,7 +2195,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   };
 
   const changeStatus = (status) => {
-    const normalized = normalizeCaseStatus(status);
+    const normalized = caseStatusValue(status);
     const log = [...(violation.auditLog||[]), {action:`Status changed to ${caseStatusLabel(normalized)}`,by:user.name,at:Date.now()}];
     updateCase({status: normalized, auditLog:log});
     if(normalized==="Closed") {
@@ -2194,7 +2221,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     return owner ? registeredUserOptionLabel(owner) : (ca.owner || "Unassigned");
   };
 
-  const sev = SEVERITY_CONFIG[violation.severity]||{};
+  const sev = SEVERITY_CONFIG[normalizeSeverity(violation.severity)]||{};
   const warningIdsInEvidence = new Set((violation.evidence || []).map(ev => ev.warningId).filter(Boolean));
   const caseAttachments = [
     ...(violation.evidence || []).map(ev => {
@@ -2245,46 +2272,16 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               </div>
             )}
             {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
-            {user.role === "Master Admin" && caseWarnings.length > 0 && (
+            {user.role === "Master Admin" && hasWarningLetter && (
               <Btn size="sm" variant="danger" onClick={() => {
                 if (!window.confirm(`Revoke all warning letters for case ${violation.id}? This will remove the warning letter(s) and roll back the case status.`)) return;
-                const allWarnings = DB.get("warnings", []);
-                const revokedWarnings = allWarnings.filter(w => w.caseId === violation.id);
-                const remainingWarnings = allWarnings.filter(w => w.caseId !== violation.id);
-                DB.set("warnings", remainingWarnings);
-                const vs = DB.get("violations", []);
-                const idx = vs.findIndex(v => v.id === violation.id);
-                if (idx >= 0) {
-                  const cleanedEvidence = (vs[idx].evidence || []).filter(ev => ev.source !== "warning-letter" && !ev.warningId);
-                  const auditLog = vs[idx].auditLog || [];
-                  let rollbackStatus = "Open";
-                  for (let i = auditLog.length - 1; i >= 0; i--) {
-                    const action = auditLog[i].action || "";
-                    if (action.includes("Warning letter")) continue;
-                    const statusMatch = action.match(/Status changed to (.+)/);
-                    if (statusMatch) { rollbackStatus = statusMatch[1]; break; }
-                  }
-                  vs[idx] = {
-                    ...vs[idx],
-                    evidence: cleanedEvidence,
-                    warningIssued: false,
-                    warningLetterId: null,
-                    status: rollbackStatus,
-                    auditLog: [
-                      ...auditLog,
-                      { action: `Warning letter(s) revoked (${revokedWarnings.map(w => w.id).join(", ")})`, by: user.name, at: Date.now() },
-                      { action: `Status rolled back to ${caseStatusLabel(rollbackStatus)}`, by: user.name, at: Date.now() }
-                    ]
-                  };
-                  DB.set("violations", vs);
-                  syncComplianceScores(DB.get("users", []), vs);
-                  setViolations([...vs]);
-                }
+                const result = revokeWarningLettersForCase(violation, user);
+                setViolations([...result.violations]);
                 const logs = DB.get("auditLogs", []);
-                logs.unshift({ id: "al" + Date.now(), ts: Date.now(), user: user.name, role: user.role, action: "WARNING_REVOKED", entity: violation.id, detail: `Revoked ${revokedWarnings.length} warning letter(s) for ${violation.empName || "unknown"}`, ip: "local" });
+                logs.unshift({ id: "al" + Date.now(), ts: Date.now(), user: user.name, role: user.role, action: "WARNING_REVOKED", entity: violation.id, detail: `Revoked ${result.revokedWarnings.length} warning letter(s) for ${violation.empName || "unknown"}`, ip: "local" });
                 DB.set("auditLogs", logs);
-                toast(`Warning letter(s) revoked for case ${violation.id}`, "success");
-              }} icon={<Icon name="x-circle" size={12}/>}>Revoke Warning</Btn>
+                toast(`Warning letter revoked and status rolled back to ${caseStatusLabel(result.rollbackStatus)}`, "success");
+              }} icon={<Icon name="x-circle" size={12}/>}>Revoke Warning Letter</Btn>
             )}
             {user.role === "Master Admin" && (
               <Btn size="sm" variant="danger" onClick={() => {
@@ -2326,7 +2323,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                 ["SOP Violated",violation.sopViolated||""],
                 ["Root Cause",violation.rootCause],
                 ["Risk Score",violation.riskScore ? <span style={{fontFamily:"var(--mono)",fontWeight:600,color:violation.riskScore>=8?"var(--red)":violation.riskScore>=5?"var(--amber)":"var(--green)"}}>{violation.riskScore}/10</span>:""],
-                ["Due Date",<span style={{color:violation.dueDate&&new Date(violation.dueDate)<new Date()&&violation.status!=="Closed"?"var(--red)":"var(--text)"}}>{violation.dueDate||""}</span>],
+                ["Due Date",<span style={{color:violation.dueDate&&new Date(violation.dueDate)<new Date()&&caseStatusValue(violation.status)!=="Closed"?"var(--red)":"var(--text)"}}>{violation.dueDate||""}</span>],
                 ["Product Groups",(violation.productGroups||[]).join(", ")||""],
                 ["Assigned HOD",violation.assignedHOD||""],
               ].map(([k,v])=>(
@@ -2447,8 +2444,8 @@ function ViewCasePage({ user, toast, setPage, editId }) {
             <div style={{padding:14}}>
               {(() => {
                 const emp = DB.get("users",[]).find(u=>u.id===violation.empId);
-                const prevCount = DB.get("violations",[]).filter(v=>v.empId===violation.empId&&v.id!==violation.id&&v.status==="Closed").length;
-                const action = getDisciplinaryMatrix()[violation.severity]?.[Math.min(prevCount,3)];
+                const prevCount = DB.get("violations",[]).filter(v=>v.empId===violation.empId&&v.id!==violation.id&&caseStatusValue(v.status)==="Closed").length;
+                const action = getDisciplinaryMatrix()[normalizeSeverity(violation.severity)]?.[Math.min(prevCount,3)];
                 return (
                   <div>
                     <div style={{fontSize:11,color:"var(--text3)",marginBottom:6}}>Based on severity ({violation.severity}) and prior violations ({prevCount}):</div>
@@ -2507,7 +2504,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 // INVESTIGATION PAGE
 // ============================================================
 function InvestigationPage({ user, toast, setPage, setEditId }) {
-  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Open","Submitted","Under Investigation","CAPA Pending","Overdue","Verification Pending"].includes(v.status)));
+  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Open","Under Investigation","CAPA Pending","Overdue","Verification Pending"].includes(caseStatusValue(v.status))));
 
   return (
     <div>
@@ -2690,7 +2687,7 @@ function WarningLettersPage({ user, toast, setPage, setEditId }) {
   const [letterPreview, setLetterPreview] = useState(null);
 
   const allViolations = DB.get("violations",[]);
-  const availableCases = allViolations.filter(v=>v.status!=="Draft" && v.status!=="Rejected");
+  const availableCases = allViolations.filter(v=>caseStatusValue(v.status)!=="Draft" && caseStatusValue(v.status)!=="Rejected");
 
   const generateLetter = () => {
     const violation = allViolations.find(v=>v.id===selectedCase);
@@ -2800,11 +2797,21 @@ function ReportsPage({ user, toast, setPage }) {
 
   const deptStats = reportDepartments.map(d=>{
     const vs = violations.filter(v=>v.dept===d);
-    const closed = vs.filter(v=>v.status==="Closed").length;
-    const open = vs.filter(v=>!["Closed","Rejected"].includes(v.status)).length;
-    const ov = vs.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length;
-    const deduction = vs.filter(isComplianceScoredCase).reduce((sum, violation) => sum + casePenalty(violation), 0);
-    return { dept:d, total:vs.length, closed, open, overdue:ov, deduction, score:departmentComplianceScore(vs) };
+    const closed = vs.filter(v=>caseStatusValue(v.status)==="Closed").length;
+    const open = vs.filter(v=>!["Closed","Rejected"].includes(caseStatusValue(v.status))).length;
+    const ov = vs.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(caseStatusValue(v.status))).length;
+    const scoredCases = vs.filter(isComplianceScoredCase);
+    const deduction = scoredCases.reduce((sum, violation) => sum + casePenalty(violation), 0);
+    const severityCounts = scoredCases.reduce((acc, violation) => {
+      const severity = normalizeSeverity(violation.severity) || "Unmapped";
+      acc[severity] = (acc[severity] || 0) + 1;
+      return acc;
+    }, {});
+    const deductionBreakdown = Object.entries(severityCounts)
+      .filter(([, count]) => count > 0)
+      .map(([severity, count]) => `${severity}: ${count}`)
+      .join("  ");
+    return { dept:d, total:vs.length, closed, open, overdue:ov, deduction, deductionBreakdown, score:departmentComplianceScore(vs) };
   });
 
   const exportMIS = () => {
@@ -2886,14 +2893,14 @@ function ReportsPage({ user, toast, setPage }) {
           empCode: String(row["Employee Code"] || row["Emp Code"] || "").trim(),
           designation: String(row.Designation || "").trim(),
           category: category || "Process Non-Adherence",
-          severity: ["Minor","Moderate","Major","Critical"].includes(row.Severity) ? row.Severity : "Minor",
+          severity: normalizeSeverity(row.Severity) || "Minor",
           description,
           sopViolated: String(row["SOP Violated"] || row["SOP / Policy Violated"] || "").trim(),
           rootCause: String(row["Root Cause"] || "").trim(),
           immediateAction: String(row["Immediate Action"] || "").trim(),
           riskScore: Number(row["Risk Score (1-10)"] || row.Risk || 1),
           repeatViolation: /^y(es)?$/i.test(String(row["Repeat (Yes/No)"] || row.Repeat || "")),
-          status: normalizeCaseStatus(row.Status || "Open"),
+          status: caseStatusValue(row.Status || "Open"),
           importedAt: Date.now(),
           updatedAt: Date.now(),
           evidence: existingIndex >= 0 ? (current[existingIndex].evidence || []) : [],
@@ -2939,9 +2946,9 @@ function ReportsPage({ user, toast, setPage }) {
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
         <KpiCard label="Total Violations" value={violations.length} color="var(--blue)"/>
-        <KpiCard label="Closed Cases" value={violations.filter(v=>v.status==="Closed").length} color="var(--green)" sub={`${Math.round(violations.filter(v=>v.status==="Closed").length/Math.max(violations.length,1)*100)}% closure rate`}/>
-        <KpiCard label="CAPA Pending" value={violations.filter(v=>v.status==="CAPA Pending").length} color="var(--amber)"/>
-        <KpiCard label="Overdue" value={violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length} color="var(--red)"/>
+        <KpiCard label="Closed Cases" value={violations.filter(v=>caseStatusValue(v.status)==="Closed").length} color="var(--green)" sub={`${Math.round(violations.filter(v=>caseStatusValue(v.status)==="Closed").length/Math.max(violations.length,1)*100)}% closure rate`}/>
+        <KpiCard label="CAPA Pending" value={violations.filter(v=>caseStatusValue(v.status)==="CAPA Pending").length} color="var(--amber)"/>
+        <KpiCard label="Overdue" value={violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(caseStatusValue(v.status))).length} color="var(--red)"/>
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
@@ -2964,7 +2971,10 @@ function ReportsPage({ user, toast, setPage }) {
                     <td style={{padding:"10px 12px"}}><Badge status={d.open>0?"Open":"Closed"}/></td>
                     <td style={{padding:"10px 12px",fontFamily:"var(--mono)"}}>{d.closed}</td>
                     <td style={{padding:"10px 12px"}}>{d.overdue>0?<span style={{color:"var(--red)",fontWeight:600,fontFamily:"var(--mono)"}}>{d.overdue}</span>:<span style={{color:"var(--green)"}}>0</span>}</td>
-                    <td style={{padding:"10px 12px",fontFamily:"var(--mono)",fontWeight:600,color:d.deduction>0?"var(--red)":"var(--green)"}}>{d.deduction}</td>
+                    <td title={d.deductionBreakdown || "No scored cases"} style={{padding:"10px 12px",fontFamily:"var(--mono)",fontWeight:600,color:d.deduction>0?"var(--red)":"var(--green)"}}>
+                      <div>{d.deduction}</div>
+                      {d.deductionBreakdown && <div style={{fontFamily:"var(--font)",fontSize:10,fontWeight:500,color:"var(--text3)",marginTop:2}}>{d.deductionBreakdown}</div>}
+                    </td>
                     <td style={{padding:"10px 12px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:6}}>
                         <div style={{width:50,height:5,background:"var(--line)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${d.score}%`,background:d.score>85?"var(--green)":d.score>70?"#D97706":"var(--red)"}}/></div>
@@ -4080,6 +4090,94 @@ function generateWarningPDF(violation, issuedBy, toast, letterType="Warning Lett
   return { filename, dataUrl };
 }
 
+function warningAuditEntry(violation) {
+  return [...(violation?.auditLog || [])].reverse().find(entry =>
+    /warning letter/i.test(String(entry.action || "")) &&
+    /(issued|generated|attached)/i.test(String(entry.action || ""))
+  );
+}
+
+function warningLetterTypeFromCase(violation) {
+  const action = warningAuditEntry(violation)?.action || "";
+  const match = action.match(/Warning letter issued \((.+)\)/i);
+  return match?.[1] || "Warning Letter Level-1";
+}
+
+function isoDateFromTimestamp(value) {
+  const date = new Date(value || Date.now());
+  return Number.isNaN(date.getTime()) ? new Date().toISOString().slice(0,10) : date.toISOString().slice(0,10);
+}
+
+function warningFromCase(violation, warningId) {
+  if (!violation) return null;
+  const warningAudit = warningAuditEntry(violation);
+  const createdAt = warningAudit?.at || violation.updatedAt || Date.now();
+  const id = warningId || violation.warningLetterId || `WL-${createdAt}`;
+  return {
+    id,
+    caseId:violation.id,
+    empId:violation.empId,
+    empName:violation.empName,
+    empCode:violation.empCode,
+    dept:violation.dept,
+    designation:violation.designation,
+    violationDate:violation.date,
+    letterDate:isoDateFromTimestamp(createdAt),
+    letterType:warningLetterTypeFromCase(violation),
+    severity:violation.severity,
+    sopViolated:violation.sopViolated,
+    category:violation.category,
+    description:violation.description,
+    disciplinaryAction:getDisciplinaryMatrix()[normalizeSeverity(violation.severity)]?.[0] || "Formal Warning",
+    corrective:"Strict adherence to all applicable SOPs and company policies.",
+    issuedBy:"HOD + HR Manager",
+    status:"Issued",
+    createdAt
+  };
+}
+
+function caseWarningRecords(violation, warnings = DB.get("warnings", [])) {
+  if (!violation) return [];
+  const existing = (warnings || []).filter(w => w.caseId === violation.id);
+  const warningIds = new Set(existing.map(w => w.id).filter(Boolean));
+  const inferredIds = [
+    violation.warningLetterId,
+    ...(violation.evidence || []).map(ev => ev.warningId)
+  ].filter(Boolean);
+  const shouldInfer = violation.warningIssued || inferredIds.length > 0 || !!warningAuditEntry(violation);
+  const inferred = [];
+  inferredIds.forEach(id => {
+    if (!warningIds.has(id)) {
+      const warning = warningFromCase(violation, id);
+      if (warning) {
+        inferred.push(warning);
+        warningIds.add(id);
+      }
+    }
+  });
+  if (shouldInfer && !existing.length && !inferred.length) {
+    const warning = warningFromCase(violation);
+    if (warning) inferred.push(warning);
+  }
+  return [...existing, ...inferred];
+}
+
+function warningIdsForCase(violation, warnings = DB.get("warnings", [])) {
+  return new Set(caseWarningRecords(violation, warnings).map(w => w.id).filter(Boolean));
+}
+
+function statusBeforeWarningLetter(violation) {
+  if (violation?.statusBeforeWarningLetter) return caseStatusValue(violation.statusBeforeWarningLetter);
+  let status = "Open";
+  for (const entry of (violation?.auditLog || [])) {
+    const action = String(entry.action || "");
+    if (/warning letter/i.test(action) && /(issued|generated|attached)/i.test(action)) return status;
+    const statusMatch = action.match(/Status (?:changed|rolled back) to (.+)$/i);
+    if (statusMatch) status = caseStatusValue(statusMatch[1]);
+  }
+  return status;
+}
+
 function warningToEvidenceAttachment(warning) {
   return {
     id:`att-${warning.id}`,
@@ -4122,8 +4220,12 @@ function prepareWarningPreview(warning, allViolations, user, toast) {
     const attachment = generateWarningPDF(violation, user, toast, next.letterType, { download:false, toast:false });
     if (!attachment) return null;
     next = { ...next, attachmentName:attachment.filename, attachmentDataUrl:attachment.dataUrl };
-    DB.set("warnings", DB.get("warnings", []).map(w => w.id === next.id ? next : w));
   }
+  const warnings = DB.get("warnings", []);
+  DB.set("warnings", warnings.some(w => w.id === next.id)
+    ? warnings.map(w => w.id === next.id ? next : w)
+    : [...warnings, next]
+  );
   upsertWarningAttachmentOnCase(next, user?.name || "System");
   return next;
 }
@@ -4147,7 +4249,7 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
     sopViolated:violation.sopViolated,
     category:violation.category,
     description:violation.description,
-    disciplinaryAction:getDisciplinaryMatrix()[violation.severity]?.[0]||"Formal Warning",
+    disciplinaryAction:getDisciplinaryMatrix()[normalizeSeverity(violation.severity)]?.[0]||"Formal Warning",
     corrective:"Strict adherence to all applicable SOPs and company policies.",
     issuedBy:issuer,
     status:"Issued",
@@ -4167,6 +4269,7 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
       ...violations[idx],
       warningIssued:true,
       warningLetterId:newW.id,
+      statusBeforeWarningLetter:violations[idx].statusBeforeWarningLetter || violations[idx].status || "Open",
       evidence:[...withoutOld, warningToEvidenceAttachment(newW)],
       auditLog:[...(violations[idx].auditLog || []), { action:`Warning letter issued (${letterType})`, by:issuedBy?.name || "System", at:Date.now() }]
     };
@@ -4174,6 +4277,41 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
   }
   if (toast) toast("Warning letter generated, saved, and attached","success");
   return newW;
+}
+
+function revokeWarningLettersForCase(violation, user) {
+  const allWarnings = DB.get("warnings", []);
+  const warningIds = warningIdsForCase(violation, allWarnings);
+  const revokedWarnings = caseWarningRecords(violation, allWarnings);
+  DB.set("warnings", allWarnings.filter(w => w.caseId !== violation.id && !warningIds.has(w.id)));
+
+  const vs = DB.get("violations", []);
+  const idx = vs.findIndex(v => v.id === violation.id);
+  if (idx < 0) return { revokedWarnings, rollbackStatus:"Open", violations:vs };
+
+  const rollbackStatus = statusBeforeWarningLetter(vs[idx]);
+  const cleanedEvidence = (vs[idx].evidence || []).filter(ev =>
+    ev.source !== "warning-letter" && !(ev.warningId && warningIds.has(ev.warningId))
+  );
+  const auditLog = vs[idx].auditLog || [];
+  vs[idx] = {
+    ...vs[idx],
+    evidence:cleanedEvidence,
+    warningIssued:false,
+    warningLetterId:null,
+    statusBeforeWarningLetter:null,
+    status:rollbackStatus,
+    updatedBy:user?.name || "System",
+    updatedAt:Date.now(),
+    auditLog:[
+      ...auditLog,
+      { action:`Warning letter(s) revoked (${revokedWarnings.map(w => w.id).join(", ") || "none"})`, by:user?.name || "System", at:Date.now() },
+      { action:`Status rolled back to ${caseStatusLabel(rollbackStatus)}`, by:user?.name || "System", at:Date.now() }
+    ]
+  };
+  DB.set("violations", vs);
+  syncComplianceScores(DB.get("users", []), vs);
+  return { revokedWarnings, rollbackStatus, violations:vs };
 }
 
 function exportDashboardPDF(violations, users) {
@@ -4204,11 +4342,11 @@ function exportDashboardPDF(violations, users) {
   let y = 37;
   const kpis = [
     ["Total Violations", violations.length],
-    ["Open Cases", violations.filter(v=>!["Closed","Rejected"].includes(v.status)).length],
-    ["Closed Cases", violations.filter(v=>v.status==="Closed").length],
-    ["Overdue CAPA", violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(v.status)).length],
-    ["Critical (Active)", violations.filter(v=>v.severity==="Critical"&&v.status!=="Closed").length],
-    ["CAPA Pending", violations.filter(v=>v.status==="CAPA Pending").length],
+    ["Open Cases", violations.filter(v=>!["Closed","Rejected"].includes(caseStatusValue(v.status))).length],
+    ["Closed Cases", violations.filter(v=>caseStatusValue(v.status)==="Closed").length],
+    ["Overdue CAPA", violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(caseStatusValue(v.status))).length],
+    ["Critical (Active)", violations.filter(v=>normalizeSeverity(v.severity)==="Critical"&&caseStatusValue(v.status)!=="Closed").length],
+    ["CAPA Pending", violations.filter(v=>caseStatusValue(v.status)==="CAPA Pending").length],
     ["Repeat Violations", violations.filter(v=>v.repeatViolation).length],
   ];
   doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(13,27,42);
@@ -4255,11 +4393,11 @@ function exportDashboardPDF(violations, users) {
 
   const deptRows = DEPARTMENTS.map(d=>{
     const vs = violations.filter(v=>v.dept===d);
-    return [d, vs.length, vs.filter(v=>!["Closed","Rejected"].includes(v.status)).length, vs.filter(v=>v.status==="Closed").length];
+    return [d, vs.length, vs.filter(v=>!["Closed","Rejected"].includes(caseStatusValue(v.status))).length, vs.filter(v=>caseStatusValue(v.status)==="Closed").length];
   });
   drawSection("Department Summary", ["Department","Total","Open","Closed"], deptRows, [92,28,28,28]);
 
-  const sevRows = ["Minor","Moderate","Major","Critical"].map(s=>[s, violations.filter(v=>v.severity===s).length]);
+  const sevRows = ["Minor","Moderate","Major","Critical"].map(s=>[s, violations.filter(v=>normalizeSeverity(v.severity)===s).length]);
   drawSection("Severity Summary", ["Severity","Count"], sevRows, [92,28]);
 
   const recentRows = violations.slice(-15).reverse().map(v=>[v.id, v.date, v.empName || "", v.severity, v.status]);
