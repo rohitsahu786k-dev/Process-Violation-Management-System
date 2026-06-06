@@ -404,6 +404,7 @@ const STATUS_CONFIG = {
   "Under Investigation":{ color:"#D97706", bg:"#FFFBEB", label:"Investigating" },
   "CAPA Pending":       { color:"#EA580C", bg:"#FFF7ED", label:"CAPA Pending" },
   "Verification Pending":{ color:"#0A6E7A", bg:"#DFF5F8", label:"Verification" },
+  "Closure Requested":  { color:"#0A6E7A", bg:"#DFF5F8", label:"Closure Requested" },
   Closed:               { color:"#0A6E3F", bg:"#E4F5EE", label:"Closed" },
   Rejected:             { color:"#B91C1C", bg:"#FEE8E8", label:"Rejected" },
   Overdue:              { color:"#B91C1C", bg:"#FEE8E8", label:"Overdue" },
@@ -415,8 +416,112 @@ const CASE_STATUS_OPTIONS = [
   { value:"Under Investigation", label:"Investigating" },
   { value:"CAPA Pending", label:"CAPA Pending" },
   { value:"Overdue", label:"Overdue" },
-  { value:"Closed", label:"Closed" },
 ];
+
+const CASE_CLOSURE_APPROVER_ROLES = ["Master Admin","Process Dept Rep"];
+const CASE_CLOSURE_REQUESTER_ROLES = ["User/Employee","HOD"];
+const CASE_WORKFLOW_MANAGER_ROLES = ["Master Admin","Management","HOD","Process Dept Rep"];
+
+function canApproveCaseClosure(user) {
+  return CASE_CLOSURE_APPROVER_ROLES.includes(user?.role);
+}
+
+function canSubmitCaseClosure(user) {
+  return CASE_CLOSURE_REQUESTER_ROLES.includes(user?.role);
+}
+
+function canManageCaseWorkflow(user) {
+  return CASE_WORKFLOW_MANAGER_ROLES.includes(user?.role);
+}
+
+function isClosureRequested(violation) {
+  return caseStatusValue(violation?.status) === "Closure Requested";
+}
+
+function canRequestClosureForCase(user, violation) {
+  const status = caseStatusValue(violation?.status);
+  return canSubmitCaseClosure(user) && !["Draft","Closed","Rejected","Archived","Closure Requested"].includes(status);
+}
+
+function priorClosureStatus(violation) {
+  const prior = caseStatusValue(violation?.statusBeforeClosureRequest || "CAPA Pending");
+  return ["Draft","Closed","Rejected","Archived","Closure Requested"].includes(prior) ? "CAPA Pending" : prior;
+}
+
+function closureRequestUpdate(violation, user) {
+  const status = caseStatusValue(violation?.status);
+  return {
+    status:"Closure Requested",
+    statusBeforeClosureRequest:["Draft","Closed","Rejected","Archived","Closure Requested"].includes(status)
+      ? priorClosureStatus(violation)
+      : status,
+    closureRequestedBy:user?.name || "System",
+    closureRequestedAt:Date.now(),
+    closureDecision:null,
+    updatedBy:user?.name || "System",
+    updatedAt:Date.now(),
+    auditLog:[...(violation?.auditLog || []), { action:"Closure submitted for approval", by:user?.name || "System", at:Date.now() }]
+  };
+}
+
+function closureAcceptUpdate(violation, user) {
+  return {
+    status:"Closed",
+    closureDate:new Date().toISOString().slice(0,10),
+    closureDecision:"Accepted",
+    closureApprovedBy:user?.name || "System",
+    closureApprovedAt:Date.now(),
+    statusBeforeClosureRequest:null,
+    updatedBy:user?.name || "System",
+    updatedAt:Date.now(),
+    auditLog:[...(violation?.auditLog || []), { action:"Closure accepted; case closed", by:user?.name || "System", at:Date.now() }]
+  };
+}
+
+function closureRejectUpdate(violation, user) {
+  const rollbackStatus = priorClosureStatus(violation);
+  return {
+    status:rollbackStatus,
+    closureDecision:"Rejected",
+    closureRejectedBy:user?.name || "System",
+    closureRejectedAt:Date.now(),
+    statusBeforeClosureRequest:null,
+    updatedBy:user?.name || "System",
+    updatedAt:Date.now(),
+    auditLog:[
+      ...(violation?.auditLog || []),
+      { action:`Closure rejected; status returned to ${caseStatusLabel(rollbackStatus)}`, by:user?.name || "System", at:Date.now() }
+    ]
+  };
+}
+
+function applyCaseClosureAction(caseId, action, user) {
+  const violations = DB.get("violations", []);
+  const idx = violations.findIndex(v => v.id === caseId);
+  if (idx < 0) throw new Error("Case not found");
+
+  const violation = violations[idx];
+  let updates;
+  if (action === "submit") {
+    if (!canRequestClosureForCase(user, violation)) throw new Error("Only User/Employee or HOD can submit this case for closure");
+    updates = closureRequestUpdate(violation, user);
+  } else if (action === "accept") {
+    if (!canApproveCaseClosure(user)) throw new Error("Only Master Admin or Process Dept Rep can accept closure");
+    if (!isClosureRequested(violation)) throw new Error("Closure has not been submitted for approval");
+    updates = closureAcceptUpdate(violation, user);
+  } else if (action === "reject") {
+    if (!canApproveCaseClosure(user)) throw new Error("Only Master Admin or Process Dept Rep can reject closure");
+    if (!isClosureRequested(violation)) throw new Error("Closure has not been submitted for approval");
+    updates = closureRejectUpdate(violation, user);
+  } else {
+    throw new Error("Unknown closure action");
+  }
+
+  violations[idx] = { ...violation, ...updates };
+  DB.set("violations", violations);
+  syncComplianceScores(DB.get("users", []), violations);
+  return { violations, violation:violations[idx] };
+}
 
 function normalizeCaseStatus(status) {
   if (status === "Submitted" || status === "Under Review") return "Open";
@@ -469,7 +574,7 @@ function workflowIndexForCase(violation, isDraftForm=false) {
   const status = caseStatusValue(violation?.status);
   if (isDraftForm || status === "Draft") return violation?.id ? 0 : -1;
   if (status === "Closed") return 4;
-  if (["CAPA Pending","Verification Pending"].includes(status)) return 3;
+  if (["CAPA Pending","Verification Pending","Closure Requested"].includes(status)) return 3;
   if (status === "Under Investigation" || status === "Overdue") return 2;
   if (status === "Open") return 1;
   return violation?.id || violation?.createdAt ? 1 : -1;
@@ -538,21 +643,27 @@ const DEFAULT_EMAIL_TEMPLATES = [
   },
   {
     id:"due",
-    name:"Due Date Reminder",
-    subject:"PVMS Reminder: {{violationId}} is due on {{dueDate}}",
-    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS action assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nDue Date: {{dueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the required action before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    name:"Investigation Due Date Reminder",
+    subject:"PVMS Reminder: {{violationId}} investigation due on {{dueDate}}",
+    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS investigation assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nInvestigation Due Date: {{dueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the investigation before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"escalation",
     name:"Escalation Reminder",
-    subject:"PVMS Escalation: {{violationId}} is overdue",
-    body:"Dear Manager,\n\nThe following PVMS case has crossed its due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nDue Date: {{dueDate}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    subject:"PVMS Escalation: Investigation due date missed for {{violationId}}",
+    body:"Dear Manager,\n\nThe following PVMS case has missed its investigation due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  },
+  {
+    id:"capaOverdue",
+    name:"CAPA Target Due Date Missed",
+    subject:"PVMS CAPA Escalation: Target due date missed for {{violationId}}",
+    body:"Dear Manager,\n\nThe following CAPA action has missed its target due date and remains pending.\n\nCase ID: {{violationId}}\nCAPA Type: {{capaActionType}}\nCAPA Owner: {{capaOwner}}\nTarget Due Date: {{capaDueDate}}\nPending Since: {{pendingDays}} days\nCAPA Description: {{capaActionDescription}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the CAPA action and ensure closure.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"summary",
     name:"Monthly Summary",
     subject:"PVMS Monthly Summary - {{summaryMonth}}",
-    body:"Dear {{userName}},\n\nMonthly PVMS summary:\n\nOpen Cases: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\nCase Description Summary: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear All,\n\nMonthly PVMS summary:\n\nOpen Cases: {{openCount}}\nPending Approvals: {{pendingCount}}\nOverdue Actions: {{overdueCount}}\nClosed This Month: {{closedCount}}\nCase Description Summary: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"passwordReset",
@@ -578,8 +689,17 @@ function insertBeforeRegards(body, line) {
 }
 
 function ensureRequiredEmailTemplateContent(template) {
-  const caseDescriptionTemplates = ["caseRegistered", "caseClosed", "due", "escalation", "summary"];
+  const caseDescriptionTemplates = ["caseRegistered", "caseClosed", "due", "escalation", "capaOverdue", "summary"];
   const defaultTemplate = DEFAULT_EMAIL_TEMPLATES.find(t => t.id === template.id);
+  if (template.id === "summary" && defaultTemplate && /Dear\s+\{\{\s*userName\s*\}\}/i.test(String(template.body || ""))) {
+    return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
+  }
+  if (template.id === "escalation" && defaultTemplate && (/crossed its due date/i.test(String(template.body || "")) || /\{\{violationId\}\}\s+is overdue/i.test(String(template.subject || "")))) {
+    return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
+  }
+  if (template.id === "due" && defaultTemplate && /Due Date:/i.test(String(template.body || "")) && !/Investigation Due Date:/i.test(String(template.body || ""))) {
+    return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
+  }
   let body = String(template.body || "");
 
   if (template.id === "passwordReset" && !body.includes("{{resetLink}}") && defaultTemplate) {
@@ -621,6 +741,7 @@ const EMAIL_TEMPLATE_VARIABLES = [
   "employeeName","userName","violationId","department","category","severity","status",
   "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
   "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount",
+  "capaActionType","capaActionDescription","capaOwner","capaDueDate",
   "email","temporaryPassword","resetRequestedBy","resetTime","resetLink","caseDescription","portalUrl"
 ];
 
@@ -772,7 +893,6 @@ function employeeComplianceRows(users = DB.get("users", []), violations = DB.get
     return rows.get(key);
   };
 
-  (users || []).filter(isComplianceUser).forEach(user => ensureRow(null, user));
   scoredCases.forEach(violation => {
     const employee = findCaseEmployee(violation, users || []);
     const row = ensureRow(violation, employee);
@@ -786,8 +906,9 @@ function employeeComplianceRows(users = DB.get("users", []), violations = DB.get
   const activeWarnings = mergedWarningRecords(warnings, violations);
   activeWarnings.forEach(warning => {
     const violation = scoredCases.find(v => v.id === warning.caseId);
+    if (!violation) return;
     const employee = (users || []).find(u => u.id === warning.empId) || (violation ? findCaseEmployee(violation, users || []) : null);
-    const row = ensureRow(violation || warning, employee);
+    const row = ensureRow(violation, employee);
     if (row) row.warningCount += 1;
   });
 
@@ -833,6 +954,27 @@ function seedIfEmpty() {
   DB.set("seq_VMS", 0);
   DB.set("seq_WL", 0);
   DB.set("seeded", true);  // boolean true
+}
+
+function isLegacyDummyRecord(item) {
+  if (!item || typeof item !== "object") return false;
+  const marker = String(item.source || item.recordType || item.origin || "").toLowerCase();
+  const id = String(item.id || item.caseId || "").toLowerCase();
+  return item.isDummy === true || item.dummy === true || item.demo === true || marker === "demo" || marker === "dummy" || /^demo[-_]/.test(id) || /^dummy[-_]/.test(id);
+}
+
+function removeLegacyDummyEntries() {
+  let changed = false;
+  ["users","violations","warnings","auditLogs","notifications"].forEach(key => {
+    const list = DB.get(key, []);
+    if (!Array.isArray(list)) return;
+    const next = list.filter(item => !isLegacyDummyRecord(item));
+    if (next.length !== list.length) {
+      DB.set(key, next);
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 // ============================================================
@@ -912,10 +1054,17 @@ function Select({ value, onChange, options, placeholder, style={} }) {
   );
 }
 
-function Textarea({ value, onChange, placeholder, rows=3 }) {
-  return <textarea value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows}
-    style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"#1F2937",outline:"none",width:"100%",resize:"vertical",lineHeight:1.5}}
-    onFocus={e=>e.target.style.borderColor="#E31E24"}
+function Textarea({ value, onChange, placeholder, rows=3, autoResize=false, style={} }) {
+  const ref = useRef(null);
+  const resize = () => {
+    if (!autoResize || !ref.current) return;
+    ref.current.style.height = "auto";
+    ref.current.style.height = `${ref.current.scrollHeight}px`;
+  };
+  useEffect(resize, [value, rows, autoResize]);
+  return <textarea ref={ref} value={value||""} onChange={e=>{onChange(e.target.value); requestAnimationFrame(resize);}} placeholder={placeholder} rows={rows}
+    style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:"var(--r)",padding:"7px 10px",fontSize:13,color:"#1F2937",outline:"none",width:"100%",resize:autoResize?"none":"vertical",overflow:autoResize?"hidden":"auto",lineHeight:1.5,...style}}
+    onFocus={e=>{e.target.style.borderColor="#E31E24"; resize();}}
     onBlur={e=>e.target.style.borderColor="#E5E7EB"}
   />;
 }
@@ -1396,7 +1545,7 @@ function Sidebar({ active, setPage, user, notifCount }) {
   const w = collapsed ? 52 : 232;
   const violations = DB.get("violations", []);
   const caseCount = violations.filter(v => !["Closed","Rejected","Archived"].includes(caseStatusValue(v.status))).length;
-  const investigationCount = violations.filter(v => ["Under Investigation","CAPA Pending","Verification Pending"].includes(caseStatusValue(v.status))).length;
+  const investigationCount = violations.filter(v => ["Under Investigation","CAPA Pending","Verification Pending","Closure Requested"].includes(caseStatusValue(v.status))).length;
 
   return (
     <nav style={{width:w,background:"#FFFFFF",borderRight:"1px solid #E5E7EB",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",overflowX:"hidden",transition:"width .2s ease",height:"100vh",position:"relative"}}>
@@ -1571,7 +1720,7 @@ function DashboardPage({ user, setPage }) {
   }).length;
   const critical = violations.filter(v=>normalizeSeverity(v.severity)==="Critical"&&caseStatusValue(v.status)!=="Closed").length;
   const repeats = violations.filter(v=>v.repeatViolation).length;
-  const capaPending = violations.filter(v=>caseStatusValue(v.status)==="CAPA Pending"||caseStatusValue(v.status)==="Verification Pending").length;
+  const capaPending = violations.filter(v=>["CAPA Pending","Verification Pending","Closure Requested"].includes(caseStatusValue(v.status))).length;
   const complianceUsers = users.filter(isComplianceUser);
   const avgScore = complianceUsers.reduce((a,b)=>a+b.complianceScore,0) / Math.max(complianceUsers.length,1);
 
@@ -1626,7 +1775,7 @@ function DashboardPage({ user, setPage }) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
         <KpiCard label="Total Violations" value={total} color="var(--blue)" trend={totalTrend} trendDir={totalTrendDir} sub="vs previous month"/>
         <KpiCard label="Open Cases" value={open} color="var(--red)" trend={`${open} active`} trendDir="up"/>
-        <KpiCard label="Overdue CAPA" value={overdue} color="#D97706" sub="past due date"/>
+        <KpiCard label="Overdue Investigation" value={overdue} color="#D97706" sub="past investigation due date"/>
         <KpiCard label="Closed Cases" value={closed} color="var(--green)" sub={`${Math.round(closed/Math.max(total,1)*100)}% closure rate`}/>
         <KpiCard label="Critical (Active)" value={critical} color="var(--red)" sub="require immediate action"/>
         <KpiCard label="Repeat Violations" value={repeats} color="#EA580C" sub="across all depts"/>
@@ -1759,6 +1908,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
     {key:"Open",label:"Open"},
     {key:"Under Investigation",label:"Investigating"},
     {key:"CAPA Pending",label:"CAPA Pending"},
+    {key:"Closure Requested",label:"Closure Requested"},
     {key:"Overdue",label:"Overdue"},
     {key:"Closed",label:"Closed"},
   ];
@@ -1782,7 +1932,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
 
   const paged = filtered.slice((page-1)*PER, page*PER);
 
-  const canApprove = ["Master Admin","HOD","Management"].includes(user.role);
+  const canAdvanceCase = canManageCaseWorkflow(user);
   const canDeleteCase = user.role === "Master Admin";
 
   const updateStatus = (id, status) => {
@@ -1790,6 +1940,10 @@ function CasesPage({ user, setPage, setEditId, toast }) {
     const idx = vs.findIndex(v=>v.id===id);
     if (idx >= 0) {
       const nextStatus = caseStatusValue(status);
+      if (["Closed","Closure Requested"].includes(nextStatus)) {
+        toast("Use the closure submit/accept workflow for closure actions", "error");
+        return;
+      }
       vs[idx].status = nextStatus;
       vs[idx].auditLog = vs[idx].auditLog || [];
       vs[idx].auditLog.push({ action:`Status changed to ${caseStatusLabel(nextStatus)}`, by:user.name, at:Date.now() });
@@ -1797,9 +1951,21 @@ function CasesPage({ user, setPage, setEditId, toast }) {
       syncComplianceScores(DB.get("users",[]), vs);
       setViolations([...vs]);
       toast(`Case ${id} status updated to ${caseStatusLabel(nextStatus)}`, "success");
-      if (nextStatus === "Closed") {
-        notifyCaseEvent("Closed", vs[idx]);
+    }
+  };
+
+  const handleClosureAction = (id, action) => {
+    try {
+      const result = applyCaseClosureAction(id, action, user);
+      setViolations([...result.violations]);
+      if (action === "submit") toast(`Case ${id} submitted for closure`, "success");
+      if (action === "accept") {
+        toast(`Closure accepted for case ${id}`, "success");
+        notifyCaseEvent("Closed", result.violation);
       }
+      if (action === "reject") toast(`Closure rejected for case ${id}`, "success");
+    } catch (err) {
+      toast(err.message || "Unable to update closure", "error");
     }
   };
 
@@ -1821,7 +1987,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
 
   const exportExcel = () => {
     const wb = XLSX.utils.book_new();
-    const rows = [["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","HOD","Due Date","Repeat","Risk Score"]];
+    const rows = [["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","HOD","Investigation Due Date","Repeat","Risk Score"]];
     filtered.forEach(v=>rows.push([v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.assignedHOD||"",v.dueDate||"",v.repeatViolation?"Yes":"No",v.riskScore]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Cases");
     XLSX.writeFile(wb, "PVMS_Cases_Export.xlsx");
@@ -1854,7 +2020,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}>
             <thead>
               <tr style={{background:"var(--bg)"}}>
-                {["Case ID","Date","Employee","Dept","Category","Severity","Repeat","Status","Due Date","Actions"].map(h=>(
+                {["Case ID","Date","Employee","Dept","Category","Severity","Repeat","Status","Investigation Due Date","Actions"].map(h=>(
                   <th key={h} style={{padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)",whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
@@ -1878,8 +2044,10 @@ function CasesPage({ user, setPage, setEditId, toast }) {
                     <td style={{padding:"9px 12px",fontFamily:"var(--mono)",fontSize:11,color:statusForDisplay==="Overdue"?"var(--red)":"var(--text3)",whiteSpace:"nowrap"}}>{v.dueDate||""}</td>
                     <td style={{padding:"9px 12px"}}>
                       <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
-                        {canApprove && caseStatusValue(v.status)==="Open" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Investigate</Btn>}
-                        {canApprove && caseStatusValue(v.status)==="Verification Pending" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Closed")}>Close</Btn>}
+                        {canAdvanceCase && caseStatusValue(v.status)==="Open" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Investigate</Btn>}
+                        {canRequestClosureForCase(user, v) && <Btn size="sm" variant="success" onClick={()=>handleClosureAction(v.id,"submit")}>Submit Closure</Btn>}
+                        {canApproveCaseClosure(user) && isClosureRequested(v) && <Btn size="sm" variant="success" onClick={()=>handleClosureAction(v.id,"accept")}>Accept</Btn>}
+                        {canApproveCaseClosure(user) && isClosureRequested(v) && <Btn size="sm" variant="danger" onClick={()=>handleClosureAction(v.id,"reject")}>Reject</Btn>}
                         <Btn size="sm" ghost onClick={()=>{setEditId(v.id);setPage("viewcase")}}>View</Btn>
                         {canDeleteCase && <Btn size="sm" variant="danger" onClick={()=>deleteCase(v.id)} icon={<Icon name="trash" size={12}/>}>Delete</Btn>}
                       </div>
@@ -1920,6 +2088,10 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const [evidence, setEvidence] = useState(existing?.evidence || []);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
   const evidenceRef = useRef(null);
+  const [fiveWhy, setFiveWhy] = useState(existing?.fiveWhy?.length ? existing.fiveWhy : ["","","","",""]);
+  const [newCapa, setNewCapa] = useState({type:"Corrective",description:"",ownerId:"",owner:"",ownerEmail:"",dueDate:"",status:"Open"});
+  const [showCapaForm, setShowCapaForm] = useState(false);
+  const [investigatorRemarks, setInvestigatorRemarks] = useState(existing?.investigatorRemarks || "");
 
   const users = DB.get("users",[]);
   const activeMasters = (key, fallback) => (DB.get(key) || fallback.map((name,i)=>({id:key+i,name,active:true}))).filter(x=>x.active!==false).map(x=>x.name);
@@ -1930,7 +2102,10 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const employees = users
     .filter(isCaseEmployeeUser)
     .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
-  const canManageCaseStatus = isEdit && ["Master Admin","HOD","Management"].includes(user.role);
+  const canManageCaseStatus = isEdit && canManageCaseWorkflow(user);
+  const canEditRcaCapa = isEdit && ["Master Admin","HOD","Management"].includes(user.role);
+  const registeredUsers = activeRegisteredUsers(users);
+  const registeredUserOptions = registeredUsers.map(u => ({ value:u.id, label:registeredUserOptionLabel(u) }));
 
   const set = (k, v) => setForm(f=>({...f,[k]:v}));
 
@@ -1988,7 +2163,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     setSaving(true);
     setTimeout(() => {
       const violations = DB.get("violations",[]);
-      const cleanForm = { ...form, riskScore: form.riskScore ? Number(form.riskScore) : "" };
+      const cleanForm = { ...form, riskScore: form.riskScore ? Number(form.riskScore) : "", ...(isEdit ? { fiveWhy, investigatorRemarks } : {}) };
       if (isEdit) {
         const idx = violations.findIndex(v=>v.id===editId);
         violations[idx] = { ...violations[idx], ...cleanForm, evidence, updatedBy:user.name, updatedAt:Date.now() };
@@ -2019,6 +2194,10 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const changeEditStatus = (status) => {
     if (!canManageCaseStatus) return;
     const normalized = caseStatusValue(status);
+    if (["Closed","Closure Requested"].includes(normalized)) {
+      toast("Use the closure submit/accept workflow for closure actions", "error");
+      return;
+    }
     const violations = DB.get("violations",[]);
     const idx = violations.findIndex(v=>v.id===editId);
     if (idx < 0) { toast("Case not found", "error"); return; }
@@ -2028,7 +2207,77 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     syncComplianceScores(DB.get("users",[]), violations);
     setForm(f=>({...f,status:normalized,auditLog}));
     toast(`Case status changed to ${caseStatusLabel(normalized)}`, "success");
-    if (normalized === "Closed") notifyCaseEvent("Closed", violations[idx]);
+  };
+
+  const handleEditClosureAction = (action) => {
+    try {
+      const result = applyCaseClosureAction(editId, action, user);
+      const updated = result.violation;
+      setForm(f=>({...f,...updated}));
+      if (action === "submit") toast(`Case ${editId} submitted for closure`, "success");
+      if (action === "accept") {
+        toast(`Closure accepted for case ${editId}`, "success");
+        notifyCaseEvent("Closed", updated);
+      }
+      if (action === "reject") toast(`Closure rejected for case ${editId}`, "success");
+    } catch (err) {
+      toast(err.message || "Unable to update closure", "error");
+    }
+  };
+
+  const persistEditCaseUpdates = (updates, successMessage) => {
+    if (!isEdit) return;
+    const violations = DB.get("violations",[]);
+    const idx = violations.findIndex(v=>v.id===editId);
+    if (idx < 0) { toast("Case not found", "error"); return; }
+    const next = { ...violations[idx], ...updates, updatedBy:user.name, updatedAt:Date.now() };
+    violations[idx] = next;
+    DB.set("violations", violations);
+    syncComplianceScores(DB.get("users",[]), violations);
+    setForm(f=>({...f,...updates}));
+    if (successMessage) toast(successMessage, "success");
+  };
+
+  const saveEditFiveWhy = () => {
+    persistEditCaseUpdates({fiveWhy, investigatorRemarks}, "5-Why analysis saved");
+  };
+
+  const selectEditCapaOwner = (ownerId) => {
+    const owner = registeredUsers.find(u => u.id === ownerId);
+    setNewCapa(f => ({
+      ...f,
+      ownerId,
+      owner: owner?.name || "",
+      ownerEmail: owner?.email || ""
+    }));
+  };
+
+  const formatEditCapaOwner = (ca) => {
+    const owner = users.find(u => u.id === ca.ownerId) || users.find(u => u.name === ca.owner);
+    return owner ? registeredUserOptionLabel(owner) : (ca.owner || "Unassigned");
+  };
+
+  const addEditCapa = () => {
+    if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
+    if (!newCapa.dueDate) { toast("Please select the CAPA target due date","error"); return; }
+    const action = {...newCapa, id:"ca"+Date.now()};
+    const updated = [...(form.capaActions||[]), action];
+    const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closure Requested","Closed"].includes(caseStatusValue(form.status));
+    persistEditCaseUpdates({
+      capaActions:updated,
+      ...(shouldAdvanceStatus ? {
+        status:"CAPA Pending",
+        auditLog:[...(form.auditLog||[]), { action:"CAPA initiated", by:user.name, at:Date.now() }]
+      } : {})
+    }, "CAPA action added");
+    setNewCapa({type:"Corrective",description:"",ownerId:"",owner:"",ownerEmail:"",dueDate:"",status:"Open"});
+    setShowCapaForm(false);
+  };
+
+  const changeEditCapaStatus = (index, status) => {
+    const updated = [...(form.capaActions||[])];
+    updated[index] = {...updated[index],status};
+    persistEditCaseUpdates({capaActions:updated}, "CAPA status updated");
   };
 
   const toggleProductGroup = (g) => {
@@ -2050,6 +2299,9 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                 ))}
               </div>
             )}
+            {isEdit && canRequestClosureForCase(user, form) && <Btn size="sm" variant="success" onClick={()=>handleEditClosureAction("submit")}>Submit Closure</Btn>}
+            {isEdit && canApproveCaseClosure(user) && isClosureRequested(form) && <Btn size="sm" variant="success" onClick={()=>handleEditClosureAction("accept")}>Accept Closure</Btn>}
+            {isEdit && canApproveCaseClosure(user) && isClosureRequested(form) && <Btn size="sm" variant="danger" onClick={()=>handleEditClosureAction("reject")}>Reject Closure</Btn>}
             <Btn size="sm" onClick={()=>setPage("cases")}>Cancel</Btn>
             {!isEdit && <Btn size="sm" onClick={()=>submit(true)} loading={saving}>Save Draft</Btn>}
             <Btn variant="primary" size="sm" onClick={()=>submit(false)} loading={saving}>{isEdit?"Save Changes":"Submit for Approval"}</Btn>
@@ -2138,6 +2390,66 @@ function CaseFormPage({ user, toast, setPage, editId }) {
               </FormGroup>
             </div>
           </Card>
+
+          {canEditRcaCapa && (
+            <>
+              <Card style={{marginBottom:16}}>
+                <CardHeader title="5-Why Root Cause Analysis"
+                  actions={<Btn size="sm" variant="primary" onClick={saveEditFiveWhy}>Save</Btn>}
+                />
+                <div style={{padding:16,display:"flex",flexDirection:"column",gap:10}}>
+                  {fiveWhy.map((w,i)=>(
+                    <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                      <div style={{width:28,height:28,borderRadius:"50%",background:"var(--blue-l)",color:"var(--blue)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0,marginTop:5}}>W{i+1}</div>
+                      <Textarea value={w} onChange={v=>{const n=[...fiveWhy];n[i]=v;setFiveWhy(n)}} placeholder={`Why ${i+1}: ${["Why did the violation occur?","Why was the SOP not followed?","Why was awareness/training insufficient?","Why was this not caught by the system?","Why does the root gap exist?"][i]}`} rows={1} autoResize/>
+                    </div>
+                  ))}
+                  <FormGroup label="Investigator Remarks / Final Root Cause">
+                    <Textarea value={investigatorRemarks} onChange={setInvestigatorRemarks} placeholder="Final determination of root cause and investigator's summary" rows={3} autoResize/>
+                  </FormGroup>
+                </div>
+              </Card>
+
+              <Card style={{marginBottom:16}}>
+                <CardHeader title="CAPA Actions"
+                  actions={<Btn size="sm" variant="primary" onClick={()=>setShowCapaForm(!showCapaForm)}>+ Add Action</Btn>}
+                />
+                {showCapaForm && (
+                  <div style={{padding:14,borderBottom:"1px solid var(--line)",background:"var(--bg)"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                      <FormGroup label="Type"><Select value={newCapa.type} onChange={v=>setNewCapa(f=>({...f,type:v}))} options={["Corrective","Preventive","System","HR Action"]} placeholder="Select type"/></FormGroup>
+                      <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectEditCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
+                      <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
+                      <FormGroup label="Target Due Date" required><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
+                      <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={CAPA_STATUSES}/></FormGroup>
+                    </div>
+                    <div style={{display:"flex",gap:8,marginTop:10,justifyContent:"flex-end"}}>
+                      <Btn size="sm" onClick={()=>setShowCapaForm(false)}>Cancel</Btn>
+                      <Btn size="sm" variant="primary" onClick={addEditCapa}>Add Action</Btn>
+                    </div>
+                  </div>
+                )}
+                <div style={{padding:form.capaActions?.length?0:14}}>
+                  {!form.capaActions?.length && <EmptyState icon="inbox" title="No CAPA actions yet" sub="Add corrective and preventive actions"/>}
+                  {form.capaActions?.map((ca,i)=>(
+                    <div key={ca.id} style={{padding:"12px 16px",borderBottom:i<form.capaActions.length-1?"1px solid var(--line)":"none"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                            <span style={{fontSize:11,fontWeight:600,background:"var(--bg2)",color:"var(--text2)",padding:"2px 7px",borderRadius:4}}>{ca.type}</span>
+                            <span style={{fontSize:11,color:ca.status==="Completed"||ca.status==="Verified"?"var(--green)":ca.status==="Overdue"?"var(--red)":"var(--amber)",fontWeight:500}}>{ca.status}</span>
+                          </div>
+                          <div style={{fontSize:13,color:"var(--text)",marginBottom:4,lineHeight:1.5,overflowWrap:"anywhere"}}>{ca.description}</div>
+                          <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatEditCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
+                        </div>
+                        <Select value={ca.status} onChange={v=>changeEditCapaStatus(i,v)} options={CAPA_STATUSES} style={{width:130,flexShrink:0}}/>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </>
+          )}
         </div>
 
         {/* RIGHT */}
@@ -2250,6 +2562,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const [attachmentPreview, setAttachmentPreview] = useState(null);
 
   const canEdit = ["Master Admin","HOD","Management"].includes(user.role);
+  const canManageStatus = canManageCaseWorkflow(user);
   const users = DB.get("users",[]);
   const activeMasters = (key, fallback) => (DB.get(key) || fallback.map((name,i)=>({id:key+i,name,active:true}))).filter(x=>x.active!==false).map(x=>x.name);
   const activeDepts = activeMasters("masterDepts", DEPARTMENTS);
@@ -2279,9 +2592,10 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 
   const addCapa = () => {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
+    if (!newCapa.dueDate) { toast("Please select the CAPA target due date","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
     const updated = [...(violation.capaActions||[]), action];
-    const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closed"].includes(caseStatusValue(violation.status));
+    const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closure Requested","Closed"].includes(caseStatusValue(violation.status));
     updateCase({
       capaActions:updated,
       ...(shouldAdvanceStatus ? {
@@ -2296,13 +2610,27 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 
   const changeStatus = (status) => {
     const normalized = caseStatusValue(status);
+    if (["Closed","Closure Requested"].includes(normalized)) {
+      toast("Use the closure submit/accept workflow for closure actions", "error");
+      return;
+    }
     const log = [...(violation.auditLog||[]), {action:`Status changed to ${caseStatusLabel(normalized)}`,by:user.name,at:Date.now()}];
     updateCase({status: normalized, auditLog:log});
-    if(normalized==="Closed") {
-      toast("Case closed successfully","success");
-      notifyCaseEvent("Closed", {...violation, status: normalized});
-    } else {
-      toast(`Case status changed to ${caseStatusLabel(normalized)}`,"success");
+    toast(`Case status changed to ${caseStatusLabel(normalized)}`,"success");
+  };
+
+  const handleViewClosureAction = (action) => {
+    try {
+      const result = applyCaseClosureAction(violation.id, action, user);
+      setViolations([...result.violations]);
+      if (action === "submit") toast(`Case ${violation.id} submitted for closure`, "success");
+      if (action === "accept") {
+        toast(`Closure accepted for case ${violation.id}`, "success");
+        notifyCaseEvent("Closed", result.violation);
+      }
+      if (action === "reject") toast(`Closure rejected for case ${violation.id}`, "success");
+    } catch (err) {
+      toast(err.message || "Unable to update closure", "error");
     }
   };
 
@@ -2362,7 +2690,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
         actions={
           <>
             <Btn size="sm" onClick={()=>setPage("cases")}> Back</Btn>
-            {canEdit && (
+            {canManageStatus && (
               <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                 {CASE_STATUS_OPTIONS.map(s=>(
                   <Btn key={s.value} size="sm" variant={effectiveCaseStatus(violation)===s.value?"primary":s.value==="Closed"?"success":s.value==="Overdue"?"danger":"default"}
@@ -2371,6 +2699,9 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                 ))}
               </div>
             )}
+            {canRequestClosureForCase(user, violation) && <Btn size="sm" variant="success" onClick={()=>handleViewClosureAction("submit")}>Submit Closure</Btn>}
+            {canApproveCaseClosure(user) && isClosureRequested(violation) && <Btn size="sm" variant="success" onClick={()=>handleViewClosureAction("accept")}>Accept Closure</Btn>}
+            {canApproveCaseClosure(user) && isClosureRequested(violation) && <Btn size="sm" variant="danger" onClick={()=>handleViewClosureAction("reject")}>Reject Closure</Btn>}
             {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
             {user.role === "Master Admin" && hasWarningLetter && (
               <Btn size="sm" variant="danger" onClick={() => {
@@ -2434,7 +2765,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                 ["SOP Violated",violation.sopViolated||""],
                 ["Root Cause",violation.rootCause],
                 ["Risk Score",violation.riskScore ? <span style={{fontFamily:"var(--mono)",fontWeight:600,color:violation.riskScore>=8?"var(--red)":violation.riskScore>=5?"var(--amber)":"var(--green)"}}>{violation.riskScore}/10</span>:""],
-                ["Due Date",<span style={{color:violation.dueDate&&new Date(violation.dueDate)<new Date()&&caseStatusValue(violation.status)!=="Closed"?"var(--red)":"var(--text)"}}>{violation.dueDate||""}</span>],
+                ["Investigation Due Date",<span style={{color:violation.dueDate&&new Date(violation.dueDate)<new Date()&&caseStatusValue(violation.status)!=="Closed"?"var(--red)":"var(--text)"}}>{violation.dueDate||""}</span>],
                 ["Product Groups",(violation.productGroups||[]).join(", ")||""],
                 ["Assigned HOD",violation.assignedHOD||""],
               ].map(([k,v])=>(
@@ -2455,11 +2786,11 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               {fiveWhy.map((w,i)=>(
                 <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
                   <div style={{width:28,height:28,borderRadius:"50%",background:"var(--blue-l)",color:"var(--blue)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0,marginTop:5}}>W{i+1}</div>
-                  <Textarea value={w} onChange={v=>{const n=[...fiveWhy];n[i]=v;setFiveWhy(n)}} placeholder={`Why ${i+1}: ${["Why did the violation occur?","Why was the SOP not followed?","Why was awareness/training insufficient?","Why was this not caught by the system?","Why does the root gap exist?"][i]}`} rows={1}/>
+                  <Textarea value={w} onChange={v=>{const n=[...fiveWhy];n[i]=v;setFiveWhy(n)}} placeholder={`Why ${i+1}: ${["Why did the violation occur?","Why was the SOP not followed?","Why was awareness/training insufficient?","Why was this not caught by the system?","Why does the root gap exist?"][i]}`} rows={1} autoResize/>
                 </div>
               ))}
               <FormGroup label="Investigator Remarks / Final Root Cause">
-                <Textarea value={investigatorRemarks} onChange={setInvestigatorRemarks} placeholder="Final determination of root cause and investigator's summary" rows={3}/>
+                <Textarea value={investigatorRemarks} onChange={setInvestigatorRemarks} placeholder="Final determination of root cause and investigator's summary" rows={3} autoResize/>
               </FormGroup>
             </div>
           </Card>
@@ -2475,7 +2806,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                   <FormGroup label="Type"><Select value={newCapa.type} onChange={v=>setNewCapa(f=>({...f,type:v}))} options={["Corrective","Preventive","System","HR Action"]} placeholder="Select type"/></FormGroup>
                   <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
                   <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
-                  <FormGroup label="Due Date"><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
+                  <FormGroup label="Target Due Date" required><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
                   <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={CAPA_STATUSES}/></FormGroup>
                 </div>
                 <div style={{display:"flex",gap:8,marginTop:10,justifyContent:"flex-end"}}>
@@ -2489,16 +2820,16 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               {violation.capaActions?.map((ca,i)=>(
                 <div key={ca.id} style={{padding:"12px 16px",borderBottom:i<violation.capaActions.length-1?"1px solid var(--line)":"none"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                    <div style={{flex:1}}>
+                    <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                         <span style={{fontSize:11,fontWeight:600,background:"var(--bg2)",color:"var(--text2)",padding:"2px 7px",borderRadius:4}}>{ca.type}</span>
                         <span style={{fontSize:11,color:ca.status==="Completed"||ca.status==="Verified"?"var(--green)":ca.status==="Overdue"?"var(--red)":"var(--amber)",fontWeight:500}}>{ca.status}</span>
                       </div>
-                      <div style={{fontSize:13,color:"var(--text)",marginBottom:4}}>{ca.description}</div>
-                      <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatCapaOwner(ca)}  Due: {ca.dueDate||""}</div>
+                      <div style={{fontSize:13,color:"var(--text)",marginBottom:4,lineHeight:1.5,overflowWrap:"anywhere"}}>{ca.description}</div>
+                      <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
                     </div>
                     {canEdit && (
-                      <Select value={ca.status} onChange={v=>{const updated=[...violation.capaActions];updated[i]={...updated[i],status:v};updateCase({capaActions:updated});}} options={CAPA_STATUSES} style={{width:130}}/>
+                      <Select value={ca.status} onChange={v=>{const updated=[...violation.capaActions];updated[i]={...updated[i],status:v};updateCase({capaActions:updated});}} options={CAPA_STATUSES} style={{width:130,flexShrink:0}}/>
                     )}
                   </div>
                 </div>
@@ -2616,7 +2947,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 // INVESTIGATION PAGE
 // ============================================================
 function InvestigationPage({ user, toast, setPage, setEditId }) {
-  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Open","Under Investigation","CAPA Pending","Overdue","Verification Pending"].includes(caseStatusValue(v.status))));
+  const [violations, setViolations] = useState(DB.get("violations",[]).filter(v=>["Open","Under Investigation","CAPA Pending","Overdue","Verification Pending","Closure Requested"].includes(caseStatusValue(v.status))));
 
   return (
     <div>
@@ -2636,7 +2967,7 @@ function InvestigationPage({ user, toast, setPage, setEditId }) {
                   <Badge status={v.status}/>
                 </div>
               </div>
-              {v.dueDate && <div style={{fontSize:11,marginTop:4,color:new Date(v.dueDate)<new Date()?"var(--red)":"var(--text3)"}}>Due: {v.dueDate} {new Date(v.dueDate)<new Date()&&" OVERDUE"}</div>}
+              {v.dueDate && <div style={{fontSize:11,marginTop:4,color:new Date(v.dueDate)<new Date()?"var(--red)":"var(--text3)"}}>Investigation due: {v.dueDate} {new Date(v.dueDate)<new Date()&&" OVERDUE"}</div>}
             </div>
             <div style={{padding:"10px 16px"}}>
               <div style={{fontSize:12,color:"var(--text2)",marginBottom:10,lineHeight:1.5}}>{v.description?.slice(0,120)}{v.description?.length>120&&""}</div>
@@ -2954,7 +3285,7 @@ function ReportsPage({ user, toast, setPage }) {
   const exportBulk = () => {
     if(user.role!=="Master Admin"){toast("Only Master Admin can bulk export","error");return;}
     const wb = XLSX.utils.book_new();
-    const vRows=[["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","Repeat","Risk","Due Date","Description"],...violations.map(v=>[v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.repeatViolation?"Yes":"No",v.riskScore,v.dueDate,v.description])];
+    const vRows=[["Case ID","Date","Employee","Emp Code","Dept","Category","Severity","Status","Repeat","Risk","Investigation Due Date","Description"],...violations.map(v=>[v.id,v.date,v.empName,v.empCode,v.dept,v.category,v.severity,v.status,v.repeatViolation?"Yes":"No",v.riskScore,v.dueDate,v.description])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(vRows), "All Cases");
     const uRows=[["Name","Emp Code","Dept","Role","Score","Violations","Active Warnings"],...employeeComplianceRows(DB.get("users",[]), violations, warnings).map(u=>[u.name,u.empCode,u.dept,u.role,u.complianceScore,u.violations,u.warningCount])];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(uRows), "Employees");
@@ -3476,6 +3807,10 @@ function EmailIntegrationPage({ user, toast }) {
     assignedHOD:"Mr. Ankit Chittora",
     assignedInvestigator:"Mr. Mukesh Menaria",
     assignedUser:"Amit Sharma",
+    capaActionType:"Corrective",
+    capaActionDescription:"Repair leakage points and verify waterproofing integrity.",
+    capaOwner:"Mr. Amit Sharma",
+    capaDueDate:"12 Jun 2026",
     pendingDays:"2",
     summaryMonth:"June 2026",
     openCount:"12",
@@ -3541,8 +3876,9 @@ function EmailIntegrationPage({ user, toast }) {
     { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
     { event:"New user created", template:"New User Welcome", to:"User", cc:"Admin copy" },
     { event:"Password reset", template:"Password Reset", to:"User", cc:"Admin copy" },
-    { event:"Due reminder", template:"Due Date Reminder", to:"Owner", cc:"Escalation chain" },
-    { event:"Overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
+    { event:"Investigation due reminder", template:"Investigation Due Date Reminder", to:"Owner", cc:"Escalation chain" },
+    { event:"Investigation overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
+    { event:"CAPA target overdue escalation", template:"CAPA Target Due Date Missed", to:"CAPA owner", cc:"HOD, Management" },
   ];
 
   return (
@@ -4238,6 +4574,25 @@ function isoDateFromTimestamp(value) {
   return Number.isNaN(date.getTime()) ? new Date().toISOString().slice(0,10) : date.toISOString().slice(0,10);
 }
 
+function warningRecordForStorage(warning) {
+  if (!warning || typeof warning !== "object") return warning;
+  const { attachmentDataUrl, previewDataUrl, ...stored } = warning;
+  return stored;
+}
+
+function warningEvidenceForStorage(evidence) {
+  if (!evidence || typeof evidence !== "object") return evidence;
+  if (evidence.source !== "warning-letter" && !evidence.warningId) return evidence;
+  const { attachmentDataUrl, ...stored } = evidence;
+  return { ...stored, url:"" };
+}
+
+function caseWithStoredWarningEvidence(violation) {
+  if (!violation?.evidence?.length) return violation;
+  const evidence = violation.evidence.map(warningEvidenceForStorage);
+  return JSON.stringify(evidence) === JSON.stringify(violation.evidence) ? violation : { ...violation, evidence };
+}
+
 function warningFromCase(violation, warningId) {
   if (!violation) return null;
   const warningAudit = warningAuditEntry(violation);
@@ -4268,7 +4623,7 @@ function warningFromCase(violation, warningId) {
 
 function caseWarningRecords(violation, warnings = DB.get("warnings", [])) {
   if (!violation) return [];
-  const existing = (warnings || []).filter(w => w.caseId === violation.id);
+  const existing = (warnings || []).filter(w => w.caseId === violation.id).map(warningRecordForStorage);
   const warningIds = new Set(existing.map(w => w.id).filter(Boolean));
   const inferredIds = [
     violation.warningLetterId,
@@ -4295,8 +4650,9 @@ function caseWarningRecords(violation, warnings = DB.get("warnings", [])) {
 function mergedWarningRecords(warnings = DB.get("warnings", []), violations = DB.get("violations", [])) {
   const byId = new Map();
   const push = (warning) => {
-    if (!warning?.id) return;
-    byId.set(warning.id, { ...(byId.get(warning.id) || {}), ...warning });
+    const stored = warningRecordForStorage(warning);
+    if (!stored?.id) return;
+    byId.set(stored.id, { ...(byId.get(stored.id) || {}), ...stored });
   };
   (warnings || []).forEach(push);
   (violations || []).forEach(violation => caseWarningRecords(violation, warnings).forEach(push));
@@ -4308,10 +4664,14 @@ function reconcileWarningLetters(options = {}) {
   const violations = DB.get("violations", []);
   const currentWarnings = DB.get("warnings", []);
   const warnings = mergedWarningRecords(currentWarnings, violations);
+  const storedViolations = violations.map(caseWithStoredWarningEvidence);
   if (persist && JSON.stringify(currentWarnings) !== JSON.stringify(warnings)) {
     DB.set("warnings", warnings);
   }
-  return { warnings, violations };
+  if (persist && JSON.stringify(violations) !== JSON.stringify(storedViolations)) {
+    DB.set("violations", storedViolations);
+  }
+  return { warnings, violations:storedViolations };
 }
 
 function warningIdsForCase(violation, warnings = DB.get("warnings", [])) {
@@ -4334,7 +4694,7 @@ function warningToEvidenceAttachment(warning) {
   return {
     id:`att-${warning.id}`,
     name:warning.attachmentName || `${warning.id}.pdf`,
-    url:warning.attachmentDataUrl || "",
+    url:"",
     type:"document",
     fileType:"document",
     source:"warning-letter",
@@ -4346,21 +4706,22 @@ function warningToEvidenceAttachment(warning) {
 
 function upsertWarningAttachmentOnCase(warning, byName="System") {
   if (!warning?.caseId) return;
+  const storedWarning = warningRecordForStorage(warning);
   const violations = DB.get("violations", []);
-  const idx = violations.findIndex(v => v.id === warning.caseId);
+  const idx = violations.findIndex(v => v.id === storedWarning.caseId);
   if (idx < 0) return;
   const existingEvidence = violations[idx].evidence || [];
-  const withoutOld = existingEvidence.filter(ev => ev.warningId !== warning.id);
+  const withoutOld = existingEvidence.filter(ev => ev.warningId !== storedWarning.id);
   const auditLog = violations[idx].auditLog || [];
-  const alreadyLogged = auditLog.some(entry => String(entry.action || "").includes(warning.id));
+  const alreadyLogged = auditLog.some(entry => String(entry.action || "").includes(storedWarning.id));
   violations[idx] = {
     ...violations[idx],
     warningIssued:true,
-    warningLetterId:warning.id,
-    evidence:[...withoutOld, warningToEvidenceAttachment(warning)],
-    auditLog:alreadyLogged ? auditLog : [...auditLog, { action:`Warning letter attached (${warning.id})`, by:byName, at:Date.now() }]
+    warningLetterId:storedWarning.id,
+    evidence:[...withoutOld, warningToEvidenceAttachment(storedWarning)],
+    auditLog:alreadyLogged ? auditLog : [...auditLog, { action:`Warning letter attached (${storedWarning.id})`, by:byName, at:Date.now() }]
   };
-  DB.set("violations", violations);
+  DB.set("violations", violations.map(caseWithStoredWarningEvidence));
 }
 
 function prepareWarningPreview(warning, allViolations, user, toast) {
@@ -4374,11 +4735,12 @@ function prepareWarningPreview(warning, allViolations, user, toast) {
     next = { ...next, attachmentName:attachment.filename, attachmentDataUrl:attachment.dataUrl };
   }
   const warnings = DB.get("warnings", []);
+  const stored = warningRecordForStorage(next);
   DB.set("warnings", warnings.some(w => w.id === next.id)
-    ? warnings.map(w => w.id === next.id ? next : w)
-    : [...warnings, next]
+    ? warnings.map(w => w.id === next.id ? stored : warningRecordForStorage(w))
+    : [...warnings.map(warningRecordForStorage), stored]
   );
-  upsertWarningAttachmentOnCase(next, user?.name || "System");
+  upsertWarningAttachmentOnCase(stored, user?.name || "System");
   return next;
 }
 
@@ -4386,8 +4748,9 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
   const attachment = generateWarningPDF(violation, issuedBy, toast, letterType, { download: options.download !== false, toast:false });
   if (!attachment) return null;
   const warnings = DB.get("warnings", []);
+  const createdAt = Date.now();
   const newW = {
-    id:"WL-"+Date.now(),
+    id:"WL-"+createdAt,
     caseId:violation.id,
     empId:violation.empId,
     empName:violation.empName,
@@ -4406,11 +4769,10 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
     issuedBy:issuer,
     status:"Issued",
     attachmentName:attachment.filename,
-    attachmentDataUrl:attachment.dataUrl,
-    createdAt:Date.now()
+    createdAt
   };
-  warnings.push(newW);
-  DB.set("warnings", warnings);
+  const previewWarning = { ...newW, attachmentDataUrl:attachment.dataUrl };
+  DB.set("warnings", [...warnings.map(warningRecordForStorage), newW]);
 
   const violations = DB.get("violations", []);
   const idx = violations.findIndex(v => v.id === violation.id);
@@ -4425,17 +4787,17 @@ function issueWarningLetter(violation, issuedBy, toast, letterType="Warning Lett
       evidence:[...withoutOld, warningToEvidenceAttachment(newW)],
       auditLog:[...(violations[idx].auditLog || []), { action:`Warning letter issued (${letterType})`, by:issuedBy?.name || "System", at:Date.now() }]
     };
-    DB.set("violations", violations);
+    DB.set("violations", violations.map(caseWithStoredWarningEvidence));
   }
   if (toast) toast("Warning letter generated, saved, and attached","success");
-  return newW;
+  return previewWarning;
 }
 
 function revokeWarningLettersForCase(violation, user) {
   const allWarnings = DB.get("warnings", []);
   const warningIds = warningIdsForCase(violation, allWarnings);
   const revokedWarnings = caseWarningRecords(violation, allWarnings);
-  DB.set("warnings", allWarnings.filter(w => w.caseId !== violation.id && !warningIds.has(w.id)));
+  DB.set("warnings", allWarnings.filter(w => w.caseId !== violation.id && !warningIds.has(w.id)).map(warningRecordForStorage));
 
   const vs = DB.get("violations", []);
   const idx = vs.findIndex(v => v.id === violation.id);
@@ -4461,7 +4823,7 @@ function revokeWarningLettersForCase(violation, user) {
       { action:`Status rolled back to ${caseStatusLabel(rollbackStatus)}`, by:user?.name || "System", at:Date.now() }
     ]
   };
-  DB.set("violations", vs);
+  DB.set("violations", vs.map(caseWithStoredWarningEvidence));
   syncComplianceScores(DB.get("users", []), vs);
   return { revokedWarnings, rollbackStatus, violations:vs };
 }
@@ -4470,7 +4832,7 @@ function deleteWarningLettersForCase(violation, user, warningId = null) {
   const allWarnings = DB.get("warnings", []);
   const targetWarnings = caseWarningRecords(violation, allWarnings).filter(w => !warningId || w.id === warningId);
   const targetIds = new Set(targetWarnings.map(w => w.id).filter(Boolean));
-  DB.set("warnings", allWarnings.filter(w => !targetIds.has(w.id)));
+  DB.set("warnings", allWarnings.filter(w => !targetIds.has(w.id)).map(warningRecordForStorage));
 
   const vs = DB.get("violations", []);
   const idx = vs.findIndex(v => v.id === violation.id);
@@ -4498,7 +4860,7 @@ function deleteWarningLettersForCase(violation, user, warningId = null) {
       { action:`Warning letter(s) deleted (${targetWarnings.map(w => w.id).join(", ") || "none"})`, by:user?.name || "System", at:Date.now() }
     ]
   };
-  DB.set("violations", vs);
+  DB.set("violations", vs.map(caseWithStoredWarningEvidence));
   syncComplianceScores(DB.get("users", []), vs);
   return { deletedWarnings:targetWarnings, violations:vs };
 }
@@ -4533,7 +4895,7 @@ function exportDashboardPDF(violations, users) {
     ["Total Violations", violations.length],
     ["Open Cases", violations.filter(v=>!["Closed","Rejected"].includes(caseStatusValue(v.status))).length],
     ["Closed Cases", violations.filter(v=>caseStatusValue(v.status)==="Closed").length],
-    ["Overdue CAPA", violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(caseStatusValue(v.status))).length],
+    ["Overdue Investigation", violations.filter(v=>v.dueDate&&new Date(v.dueDate)<new Date()&&!["Closed","Rejected"].includes(caseStatusValue(v.status))).length],
     ["Critical (Active)", violations.filter(v=>normalizeSeverity(v.severity)==="Critical"&&caseStatusValue(v.status)!=="Closed").length],
     ["CAPA Pending", violations.filter(v=>caseStatusValue(v.status)==="CAPA Pending").length],
     ["Repeat Violations", violations.filter(v=>v.repeatViolation).length],
@@ -4946,6 +5308,7 @@ function App() {
   useEffect(() => {
     syncStateFromServer().then(() => {
       seedIfEmpty();
+      removeLegacyDummyEntries();
       reconcileWarningLetters();
       syncComplianceScores();
       setNotifications(DB.get("notifications",[]) || []);
@@ -4956,6 +5319,7 @@ function App() {
     }).catch(err => {
       console.error("Failed to sync from DB", err);
       seedIfEmpty();
+      removeLegacyDummyEntries();
       reconcileWarningLetters();
       syncComplianceScores();
       setNotifications(DB.get("notifications",[]) || []);

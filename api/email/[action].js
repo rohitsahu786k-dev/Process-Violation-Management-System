@@ -281,7 +281,7 @@ async function handleTest(req, res) {
     if (!to || !template) return res.status(400).json({ error: "Missing recipient or template" });
     const now = new Date();
     const rendered = renderTemplate(template, {
-      userName: "PVMS User",
+      userName: "All",
       employeeName: "PVMS User",
       violationId: "PVMS-TEST-0001",
       caseId: "PVMS-TEST-0001",
@@ -294,6 +294,10 @@ async function handleTest(req, res) {
       closureDate: `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`,
       status: "Submitted",
       assignedUser: "PVMS User",
+      capaActionType: "Corrective",
+      capaActionDescription: "Repair leakage points and verify waterproofing integrity.",
+      capaOwner: "PVMS User",
+      capaDueDate: "12 Jun 2026",
       assignedHOD: "Department HOD",
       assignedInvestigator: "PVMS Investigator",
       pendingDays: "2",

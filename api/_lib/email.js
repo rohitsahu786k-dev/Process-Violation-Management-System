@@ -12,6 +12,9 @@ const ALWAYS_CC = [
   "process@onepws.com",
   "jatin.chouhan@onepws.com"
 ];
+const BLOCKED_EMAILS = new Set([
+  "marketing@onepws.com"
+]);
 
 function normalizePortalUrl(value) {
   const raw = String(value || process.env.PVMS_PORTAL_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || DEFAULT_PORTAL_URL).trim();
@@ -24,7 +27,8 @@ function parseAddresses(value) {
   const list = Array.isArray(value) ? value : String(value).split(/[;,]/);
   return list
     .map(item => String(item || "").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(address => !BLOCKED_EMAILS.has(address.toLowerCase()));
 }
 
 function uniqueAddresses(...groups) {
@@ -148,6 +152,7 @@ function createTransporter() {
 async function sendEmail({ to, cc, subject, html, text, skipCc }) {
   const transporter = createTransporter();
   const toList = uniqueAddresses(to);
+  if (!toList.length) throw new Error("No deliverable recipient email address");
   const ccList = skipCc
     ? uniqueAddresses(cc).filter(address => !toList.some(item => item.toLowerCase() === address.toLowerCase()))
     : uniqueAddresses(cc, ALWAYS_CC).filter(address => !toList.some(item => item.toLowerCase() === address.toLowerCase()));
@@ -161,4 +166,4 @@ async function sendEmail({ to, cc, subject, html, text, skipCc }) {
   });
 }
 
-module.exports = { renderTemplate, sendEmail, normalizePortalUrl, ALWAYS_CC };
+module.exports = { renderTemplate, sendEmail, normalizePortalUrl, ALWAYS_CC, BLOCKED_EMAILS };
