@@ -419,7 +419,7 @@ const CASE_STATUS_OPTIONS = [
 ];
 
 const CASE_CLOSURE_APPROVER_ROLES = ["Master Admin","Process Dept Rep"];
-const CASE_CLOSURE_REQUESTER_ROLES = ["User/Employee","HOD"];
+const CASE_CLOSURE_REQUESTER_ROLES = ["Master Admin","Management","HOD","Process Dept Rep","User/Employee"];
 const CASE_WORKFLOW_MANAGER_ROLES = ["Master Admin","Management","HOD","Process Dept Rep"];
 
 function canApproveCaseClosure(user) {
@@ -503,7 +503,7 @@ function applyCaseClosureAction(caseId, action, user) {
   const violation = violations[idx];
   let updates;
   if (action === "submit") {
-    if (!canRequestClosureForCase(user, violation)) throw new Error("Only User/Employee or HOD can submit this case for closure");
+    if (!canRequestClosureForCase(user, violation)) throw new Error("This case cannot be submitted for closure by the current user");
     updates = closureRequestUpdate(violation, user);
   } else if (action === "accept") {
     if (!canApproveCaseClosure(user)) throw new Error("Only Master Admin or Process Dept Rep can accept closure");
@@ -615,6 +615,33 @@ const VIOLATION_CATEGORIES = ["Safety Protocol","Process Non-Adherence","Documen
 const ROOT_CAUSE_CATEGORIES = ["Human Error","Process Gap","Training Deficiency","System/Equipment Failure","Communication Failure","Supervision Gap","Resource Constraint","Design/Engineering Issue","Environmental Factor"];
 const DESIGNATIONS = ["Operator","Sr. Operator","Process Associate","Sr. Process Associate","Team Leader","Supervisor","Assistant Manager","Deputy Manager","Manager","Senior Manager","Deputy General Manager","General Manager","HOD","VP","Director"];
 const CAPA_STATUSES = ["Open","In Progress","Completed","Verified","Overdue"];
+const CAPA_MASTER_ONLY_STATUSES = ["Completed","Verified"];
+
+function isMasterOnlyCapaStatus(status) {
+  return CAPA_MASTER_ONLY_STATUSES.includes(status);
+}
+
+function canSelectCapaStatus(user, status) {
+  return user?.role === "Master Admin" || !isMasterOnlyCapaStatus(status);
+}
+
+function capaStatusOptionsForUser(user) {
+  return user?.role === "Master Admin"
+    ? CAPA_STATUSES
+    : CAPA_STATUSES.filter(status => !isMasterOnlyCapaStatus(status));
+}
+
+function visibleCapaStatus(status, user) {
+  return canSelectCapaStatus(user, status) ? (status || "Open") : "Admin Review";
+}
+
+function capaStatusColor(status, user) {
+  const visibleStatus = visibleCapaStatus(status, user);
+  if (visibleStatus === "Completed" || visibleStatus === "Verified") return "var(--green)";
+  if (visibleStatus === "Overdue") return "var(--red)";
+  if (visibleStatus === "Admin Review") return "var(--text3)";
+  return "var(--amber)";
+}
 const DISCIPLINARY_MATRIX = {
   Minor:    ["Verbal Counseling","Written Warning L-1","Written Warning L-2 + Increment Review","Final Warning"],
   Moderate: ["Written Warning L-1","Written Warning L-2 + Increment Hold","Final Warning","Termination Review"],
@@ -2045,7 +2072,7 @@ function CasesPage({ user, setPage, setEditId, toast }) {
                     <td style={{padding:"9px 12px"}}>
                       <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
                         {canAdvanceCase && caseStatusValue(v.status)==="Open" && <Btn size="sm" variant="success" onClick={()=>updateStatus(v.id,"Under Investigation")}>Investigate</Btn>}
-                        {canRequestClosureForCase(user, v) && <Btn size="sm" variant="success" onClick={()=>handleClosureAction(v.id,"submit")}>Submit Closure</Btn>}
+                        {canRequestClosureForCase(user, v) && <Btn size="sm" variant="success" onClick={()=>handleClosureAction(v.id,"submit")}>Submit for Closure</Btn>}
                         {canApproveCaseClosure(user) && isClosureRequested(v) && <Btn size="sm" variant="success" onClick={()=>handleClosureAction(v.id,"accept")}>Accept</Btn>}
                         {canApproveCaseClosure(user) && isClosureRequested(v) && <Btn size="sm" variant="danger" onClick={()=>handleClosureAction(v.id,"reject")}>Reject</Btn>}
                         <Btn size="sm" ghost onClick={()=>{setEditId(v.id);setPage("viewcase")}}>View</Btn>
@@ -2106,6 +2133,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const canEditRcaCapa = isEdit && ["Master Admin","HOD","Management"].includes(user.role);
   const registeredUsers = activeRegisteredUsers(users);
   const registeredUserOptions = registeredUsers.map(u => ({ value:u.id, label:registeredUserOptionLabel(u) }));
+  const availableCapaStatuses = capaStatusOptionsForUser(user);
 
   const set = (k, v) => setForm(f=>({...f,[k]:v}));
 
@@ -2260,6 +2288,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   const addEditCapa = () => {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
     if (!newCapa.dueDate) { toast("Please select the CAPA target due date","error"); return; }
+    if (!canSelectCapaStatus(user, newCapa.status)) { toast("Only Master Admin can select Completed or Verified CAPA status","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
     const updated = [...(form.capaActions||[]), action];
     const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closure Requested","Closed"].includes(caseStatusValue(form.status));
@@ -2275,6 +2304,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
   };
 
   const changeEditCapaStatus = (index, status) => {
+    if (!canSelectCapaStatus(user, status)) { toast("Only Master Admin can select Completed or Verified CAPA status","error"); return; }
     const updated = [...(form.capaActions||[])];
     updated[index] = {...updated[index],status};
     persistEditCaseUpdates({capaActions:updated}, "CAPA status updated");
@@ -2299,7 +2329,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                 ))}
               </div>
             )}
-            {isEdit && canRequestClosureForCase(user, form) && <Btn size="sm" variant="success" onClick={()=>handleEditClosureAction("submit")}>Submit Closure</Btn>}
+            {isEdit && canRequestClosureForCase(user, form) && <Btn size="sm" variant="success" onClick={()=>handleEditClosureAction("submit")}>Submit for Closure</Btn>}
             {isEdit && canApproveCaseClosure(user) && isClosureRequested(form) && <Btn size="sm" variant="success" onClick={()=>handleEditClosureAction("accept")}>Accept Closure</Btn>}
             {isEdit && canApproveCaseClosure(user) && isClosureRequested(form) && <Btn size="sm" variant="danger" onClick={()=>handleEditClosureAction("reject")}>Reject Closure</Btn>}
             <Btn size="sm" onClick={()=>setPage("cases")}>Cancel</Btn>
@@ -2421,7 +2451,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                       <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectEditCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
                       <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
                       <FormGroup label="Target Due Date" required><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
-                      <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={CAPA_STATUSES}/></FormGroup>
+                      <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={availableCapaStatuses}/></FormGroup>
                     </div>
                     <div style={{display:"flex",gap:8,marginTop:10,justifyContent:"flex-end"}}>
                       <Btn size="sm" onClick={()=>setShowCapaForm(false)}>Cancel</Btn>
@@ -2437,12 +2467,12 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                             <span style={{fontSize:11,fontWeight:600,background:"var(--bg2)",color:"var(--text2)",padding:"2px 7px",borderRadius:4}}>{ca.type}</span>
-                            <span style={{fontSize:11,color:ca.status==="Completed"||ca.status==="Verified"?"var(--green)":ca.status==="Overdue"?"var(--red)":"var(--amber)",fontWeight:500}}>{ca.status}</span>
+                            <span style={{fontSize:11,color:capaStatusColor(ca.status, user),fontWeight:500}}>{visibleCapaStatus(ca.status, user)}</span>
                           </div>
                           <div style={{fontSize:13,color:"var(--text)",marginBottom:4,lineHeight:1.5,overflowWrap:"anywhere"}}>{ca.description}</div>
                           <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatEditCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
                         </div>
-                        <Select value={ca.status} onChange={v=>changeEditCapaStatus(i,v)} options={CAPA_STATUSES} style={{width:130,flexShrink:0}}/>
+                        {canSelectCapaStatus(user, ca.status) && <Select value={ca.status} onChange={v=>changeEditCapaStatus(i,v)} options={availableCapaStatuses} style={{width:130,flexShrink:0}}/>}
                       </div>
                     </div>
                   ))}
@@ -2571,6 +2601,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const hods = users.filter(u=>u.role==="HOD"||u.role==="Master Admin");
   const registeredUsers = activeRegisteredUsers(users);
   const registeredUserOptions = registeredUsers.map(u => ({ value:u.id, label:registeredUserOptionLabel(u) }));
+  const availableCapaStatuses = capaStatusOptionsForUser(user);
   const caseWarnings = caseWarningRecords(violation);
   const hasWarningLetter = caseWarnings.length > 0 || violation.warningIssued || !!violation.warningLetterId;
 
@@ -2593,6 +2624,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
   const addCapa = () => {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
     if (!newCapa.dueDate) { toast("Please select the CAPA target due date","error"); return; }
+    if (!canSelectCapaStatus(user, newCapa.status)) { toast("Only Master Admin can select Completed or Verified CAPA status","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
     const updated = [...(violation.capaActions||[]), action];
     const shouldAdvanceStatus = !["CAPA Pending","Verification Pending","Closure Requested","Closed"].includes(caseStatusValue(violation.status));
@@ -2649,6 +2681,13 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     return owner ? registeredUserOptionLabel(owner) : (ca.owner || "Unassigned");
   };
 
+  const changeViewCapaStatus = (index, status) => {
+    if (!canSelectCapaStatus(user, status)) { toast("Only Master Admin can select Completed or Verified CAPA status","error"); return; }
+    const updated = [...(violation.capaActions || [])];
+    updated[index] = {...updated[index],status};
+    updateCase({capaActions:updated});
+  };
+
   const sev = SEVERITY_CONFIG[normalizeSeverity(violation.severity)]||{};
   const warningIdsInEvidence = new Set((violation.evidence || []).map(ev => ev.warningId).filter(Boolean));
   const caseAttachments = [
@@ -2699,7 +2738,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                 ))}
               </div>
             )}
-            {canRequestClosureForCase(user, violation) && <Btn size="sm" variant="success" onClick={()=>handleViewClosureAction("submit")}>Submit Closure</Btn>}
+            {canRequestClosureForCase(user, violation) && <Btn size="sm" variant="success" onClick={()=>handleViewClosureAction("submit")}>Submit for Closure</Btn>}
             {canApproveCaseClosure(user) && isClosureRequested(violation) && <Btn size="sm" variant="success" onClick={()=>handleViewClosureAction("accept")}>Accept Closure</Btn>}
             {canApproveCaseClosure(user) && isClosureRequested(violation) && <Btn size="sm" variant="danger" onClick={()=>handleViewClosureAction("reject")}>Reject Closure</Btn>}
             {canEdit && <Btn size="sm" onClick={()=>{setPage("newcase")}} variant="default">Edit</Btn>}
@@ -2807,7 +2846,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                   <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
                   <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
                   <FormGroup label="Target Due Date" required><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
-                  <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={CAPA_STATUSES}/></FormGroup>
+                  <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={availableCapaStatuses}/></FormGroup>
                 </div>
                 <div style={{display:"flex",gap:8,marginTop:10,justifyContent:"flex-end"}}>
                   <Btn size="sm" onClick={()=>setShowCapaForm(false)}>Cancel</Btn>
@@ -2823,13 +2862,13 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                         <span style={{fontSize:11,fontWeight:600,background:"var(--bg2)",color:"var(--text2)",padding:"2px 7px",borderRadius:4}}>{ca.type}</span>
-                        <span style={{fontSize:11,color:ca.status==="Completed"||ca.status==="Verified"?"var(--green)":ca.status==="Overdue"?"var(--red)":"var(--amber)",fontWeight:500}}>{ca.status}</span>
+                        <span style={{fontSize:11,color:capaStatusColor(ca.status, user),fontWeight:500}}>{visibleCapaStatus(ca.status, user)}</span>
                       </div>
                       <div style={{fontSize:13,color:"var(--text)",marginBottom:4,lineHeight:1.5,overflowWrap:"anywhere"}}>{ca.description}</div>
                       <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
                     </div>
-                    {canEdit && (
-                      <Select value={ca.status} onChange={v=>{const updated=[...violation.capaActions];updated[i]={...updated[i],status:v};updateCase({capaActions:updated});}} options={CAPA_STATUSES} style={{width:130,flexShrink:0}}/>
+                    {canEdit && canSelectCapaStatus(user, ca.status) && (
+                      <Select value={ca.status} onChange={v=>changeViewCapaStatus(i,v)} options={availableCapaStatuses} style={{width:130,flexShrink:0}}/>
                     )}
                   </div>
                 </div>
