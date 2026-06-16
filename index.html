@@ -2471,7 +2471,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                   <div style={{padding:14,borderBottom:"1px solid var(--line)",background:"var(--bg)"}}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                       <FormGroup label="Type"><Select value={newCapa.type} onChange={v=>setNewCapa(f=>({...f,type:v}))} options={["Corrective","Preventive","System","HR Action"]} placeholder="Select type"/></FormGroup>
-                      <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectEditCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
+                      <FormGroup label="Owner" required><Select value={newCapa.ownerId || ""} onChange={selectEditCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
                       <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
                       <FormGroup label="Target Due Date" required><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
                       <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={availableCapaStatuses}/></FormGroup>
@@ -2894,7 +2894,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
               <div style={{padding:14,borderBottom:"1px solid var(--line)",background:"var(--bg)"}}>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                   <FormGroup label="Type"><Select value={newCapa.type} onChange={v=>setNewCapa(f=>({...f,type:v}))} options={["Corrective","Preventive","System","HR Action"]} placeholder="Select type"/></FormGroup>
-                  <FormGroup label="Owner"><Select value={newCapa.ownerId || ""} onChange={selectCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
+                  <FormGroup label="Owner" required><Select value={newCapa.ownerId || ""} onChange={selectCapaOwner} options={registeredUserOptions} placeholder="Assign to"/></FormGroup>
                   <div style={{gridColumn:"1/-1"}}><FormGroup label="Description" required><Textarea value={newCapa.description} onChange={v=>setNewCapa(f=>({...f,description:v}))} placeholder="Describe the corrective/preventive action" rows={2}/></FormGroup></div>
                   <FormGroup label="Target Due Date" required><Input type="date" value={newCapa.dueDate} onChange={v=>setNewCapa(f=>({...f,dueDate:v}))}/></FormGroup>
                   <FormGroup label="Status"><Select value={newCapa.status} onChange={v=>setNewCapa(f=>({...f,status:v}))} options={availableCapaStatuses}/></FormGroup>
