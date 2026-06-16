@@ -625,6 +625,10 @@ function canSelectCapaStatus(user, status) {
   return user?.role === "Master Admin" || !isMasterOnlyCapaStatus(status);
 }
 
+function hasCapaOwner(capa) {
+  return !!(capa?.ownerId || String(capa?.owner || "").trim());
+}
+
 function capaStatusOptionsForUser(user) {
   return user?.role === "Master Admin"
     ? CAPA_STATUSES
@@ -2287,6 +2291,7 @@ function CaseFormPage({ user, toast, setPage, editId }) {
 
   const addEditCapa = () => {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
+    if (!hasCapaOwner(newCapa)) { toast("Please assign the CAPA action owner","error"); return; }
     if (!newCapa.dueDate) { toast("Please select the CAPA target due date","error"); return; }
     if (!canSelectCapaStatus(user, newCapa.status)) { toast("Only Master Admin can select Completed or Verified CAPA status","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
@@ -2308,6 +2313,24 @@ function CaseFormPage({ user, toast, setPage, editId }) {
     const updated = [...(form.capaActions||[])];
     updated[index] = {...updated[index],status};
     persistEditCaseUpdates({capaActions:updated}, "CAPA status updated");
+  };
+
+  const changeEditCapaOwner = (index, ownerId) => {
+    const owner = registeredUsers.find(u => u.id === ownerId);
+    const updated = [...(form.capaActions || [])];
+    updated[index] = {
+      ...updated[index],
+      ownerId,
+      owner: owner?.name || "",
+      ownerEmail: owner?.email || ""
+    };
+    persistEditCaseUpdates({capaActions:updated}, "CAPA owner updated");
+  };
+
+  const changeEditCapaDueDate = (index, dueDate) => {
+    const updated = [...(form.capaActions || [])];
+    updated[index] = {...updated[index], dueDate};
+    persistEditCaseUpdates({capaActions:updated}, "CAPA target date updated");
   };
 
   const toggleProductGroup = (g) => {
@@ -2470,7 +2493,14 @@ function CaseFormPage({ user, toast, setPage, editId }) {
                             <span style={{fontSize:11,color:capaStatusColor(ca.status, user),fontWeight:500}}>{visibleCapaStatus(ca.status, user)}</span>
                           </div>
                           <div style={{fontSize:13,color:"var(--text)",marginBottom:4,lineHeight:1.5,overflowWrap:"anywhere"}}>{ca.description}</div>
-                          <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatEditCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
+                          <div style={{display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,160px)",gap:8,marginTop:8,maxWidth:520}}>
+                            <FormGroup label="Owner">
+                              <Select value={ca.ownerId || ""} onChange={v=>changeEditCapaOwner(i,v)} options={registeredUserOptions} placeholder="Assign to"/>
+                            </FormGroup>
+                            <FormGroup label="Target Due Date">
+                              <Input type="date" value={ca.dueDate || ""} onChange={v=>changeEditCapaDueDate(i,v)}/>
+                            </FormGroup>
+                          </div>
                         </div>
                         {canSelectCapaStatus(user, ca.status) && <Select value={ca.status} onChange={v=>changeEditCapaStatus(i,v)} options={availableCapaStatuses} style={{width:130,flexShrink:0}}/>}
                       </div>
@@ -2623,6 +2653,7 @@ function ViewCasePage({ user, toast, setPage, editId }) {
 
   const addCapa = () => {
     if (!newCapa.description) { toast("Please describe the CAPA action","error"); return; }
+    if (!hasCapaOwner(newCapa)) { toast("Please assign the CAPA action owner","error"); return; }
     if (!newCapa.dueDate) { toast("Please select the CAPA target due date","error"); return; }
     if (!canSelectCapaStatus(user, newCapa.status)) { toast("Only Master Admin can select Completed or Verified CAPA status","error"); return; }
     const action = {...newCapa, id:"ca"+Date.now()};
@@ -2686,6 +2717,26 @@ function ViewCasePage({ user, toast, setPage, editId }) {
     const updated = [...(violation.capaActions || [])];
     updated[index] = {...updated[index],status};
     updateCase({capaActions:updated});
+  };
+
+  const changeViewCapaOwner = (index, ownerId) => {
+    const owner = registeredUsers.find(u => u.id === ownerId);
+    const updated = [...(violation.capaActions || [])];
+    updated[index] = {
+      ...updated[index],
+      ownerId,
+      owner: owner?.name || "",
+      ownerEmail: owner?.email || ""
+    };
+    updateCase({capaActions:updated});
+    toast("CAPA owner updated","success");
+  };
+
+  const changeViewCapaDueDate = (index, dueDate) => {
+    const updated = [...(violation.capaActions || [])];
+    updated[index] = {...updated[index], dueDate};
+    updateCase({capaActions:updated});
+    toast("CAPA target date updated","success");
   };
 
   const sev = SEVERITY_CONFIG[normalizeSeverity(violation.severity)]||{};
@@ -2865,7 +2916,18 @@ function ViewCasePage({ user, toast, setPage, editId }) {
                         <span style={{fontSize:11,color:capaStatusColor(ca.status, user),fontWeight:500}}>{visibleCapaStatus(ca.status, user)}</span>
                       </div>
                       <div style={{fontSize:13,color:"var(--text)",marginBottom:4,lineHeight:1.5,overflowWrap:"anywhere"}}>{ca.description}</div>
-                      <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
+                      {canEdit ? (
+                        <div style={{display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,160px)",gap:8,marginTop:8,maxWidth:520}}>
+                          <FormGroup label="Owner">
+                            <Select value={ca.ownerId || ""} onChange={v=>changeViewCapaOwner(i,v)} options={registeredUserOptions} placeholder="Assign to"/>
+                          </FormGroup>
+                          <FormGroup label="Target Due Date">
+                            <Input type="date" value={ca.dueDate || ""} onChange={v=>changeViewCapaDueDate(i,v)}/>
+                          </FormGroup>
+                        </div>
+                      ) : (
+                        <div style={{fontSize:11,color:"var(--text3)"}}>Owner: {formatCapaOwner(ca)}  Target: {ca.dueDate||""}</div>
+                      )}
                     </div>
                     {canEdit && canSelectCapaStatus(user, ca.status) && (
                       <Select value={ca.status} onChange={v=>changeViewCapaStatus(i,v)} options={availableCapaStatuses} style={{width:130,flexShrink:0}}/>
