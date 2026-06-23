@@ -790,6 +790,9 @@ const EMAIL_TEMPLATE_VARIABLES = [
 // ============================================================
 const DB = {
   // Data is synced from MongoDB to localStorage on load, then writes are pushed back to DB
+  serverSyncReady: false,
+  enableServerSync: () => { DB.serverSyncReady = true; },
+  disableServerSync: () => { DB.serverSyncReady = false; },
   get: (key, def=null) => {
     try {
       const v = localStorage.getItem("pvms2_" + key);
@@ -800,7 +803,7 @@ const DB = {
   set: (key, val) => {
     try {
       localStorage.setItem("pvms2_" + key, JSON.stringify(val));
-      if (key !== "currentUser") {
+      if (key !== "currentUser" && DB.serverSyncReady) {
         fetch('/api/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -5417,6 +5420,7 @@ function App() {
 
   useEffect(() => {
     syncStateFromServer().then(() => {
+      DB.enableServerSync();
       seedIfEmpty();
       removeLegacyDummyEntries();
       reconcileWarningLetters();
@@ -5428,6 +5432,7 @@ function App() {
       setDbLoaded(true);
     }).catch(err => {
       console.error("Failed to sync from DB", err);
+      DB.disableServerSync();
       seedIfEmpty();
       removeLegacyDummyEntries();
       reconcileWarningLetters();
