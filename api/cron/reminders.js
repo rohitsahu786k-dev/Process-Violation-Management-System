@@ -10,14 +10,14 @@ const defaultTemplate = {
   id: "due",
   name: "Investigation Due Date Reminder",
   subject: "PVMS Reminder: {{violationId}} investigation due on {{dueDate}}",
-  body: "Dear {{userName}},\n\nThis is an automated reminder for {{violationId}}.\n\nCase Description: {{caseDescription}}\nInvestigation Due Date: {{dueDate}}\nStatus: {{status}}\nPVMS Portal: {{portalUrl}}\n\nRegards,\nPVMS Automation System"
+  body: "Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS investigation assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nInvestigation Due Date: {{dueDate}}\nCAPA Target Due Date: {{capaDueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the investigation before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
 };
 
 const investigationEscalationTemplate = {
   id: "escalation",
   name: "Escalation Reminder",
   subject: "PVMS Escalation: Investigation due date missed for {{violationId}}",
-  body: "Dear Manager,\n\nThe following PVMS case has missed its investigation due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+  body: "Dear Manager,\n\nThe following PVMS case has missed its investigation due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nRoot Cause: {{rootCause}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
 };
 
 const capaOverdueTemplate = {
@@ -186,22 +186,44 @@ async function sendOncePerDay(db, { reminderKey, reminderDate, type, to, cc, tem
   }
 }
 
-async function processScheduledReminders(db, now) {
+async function processScheduledReminders(db, state, now) {
   const reminders = await db.collection("reminders").find({
     isActive: true,
     nextReminderAt: { $lte: now }
   }).limit(50).toArray();
 
   let sent = 0;
+  const violations = Array.isArray(state.violations) ? state.violations : [];
+
   for (const reminder of reminders) {
     try {
-      const rendered = renderTemplate(reminder.template || defaultTemplate, {
+      const type = reminder.type || "due";
+      const template = templateFromState(state, type, defaultTemplate);
+      
+      const violation = violations.find(v => v.id === reminder.violationId);
+      let capaDueDateStr = "";
+      let priorityStr = "";
+      if (violation) {
+        priorityStr = violation.severity || "";
+        const pendingCapa = (violation.capaActions || [])
+          .filter(a => !CLOSED_CAPA_STATUSES.has(normalizeStatus(a.status)));
+        if (pendingCapa.length > 0) {
+          const sorted = pendingCapa.filter(a => a.dueDate).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+          if (sorted.length > 0) {
+            capaDueDateStr = formatEmailDate(sorted[0].dueDate);
+          }
+        }
+      }
+
+      const rendered = renderTemplate(reminder.template || template, {
         userName: reminder.userName || "PVMS User",
         violationId: reminder.violationId || "PVMS",
         caseDescription: reminder.caseDescription || reminder.description || "",
         dueDate: formatEmailDate(reminder.dueDate),
         status: reminder.status || "Pending",
-        portalUrl: normalizePortalUrl(reminder.portalUrl)
+        portalUrl: normalizePortalUrl(reminder.portalUrl),
+        capaDueDate: capaDueDateStr,
+        priority: priorityStr
       });
       await sendEmail({ to: reminder.email, ...rendered });
       sent++;
@@ -268,6 +290,7 @@ async function processInvestigationDueMissed(db, state, now) {
         violationId: violation.id || "",
         assignedUser: investigator?.name || violation.assignedInvestigator || hod?.name || "Unassigned",
         dueDate: formatEmailDate(violation.dueDate),
+        rootCause: violation.rootCause || "",
         pendingDays: pendingDays(violation.dueDate, todayKey),
         status,
         caseDescription: violation.description || "",
@@ -352,7 +375,7 @@ module.exports = async function handler(req, res) {
     const now = new Date();
     const state = await db.collection("appState").findOne({ _id: "global" }) || {};
 
-    const scheduled = await processScheduledReminders(db, now);
+    const scheduled = await processScheduledReminders(db, state, now);
     const investigationDueMissed = await processInvestigationDueMissed(db, state, now);
     const capaTargetMissed = await processCapaTargetMissed(db, state, now);
 

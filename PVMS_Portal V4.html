@@ -685,13 +685,13 @@ const DEFAULT_EMAIL_TEMPLATES = [
     id:"due",
     name:"Investigation Due Date Reminder",
     subject:"PVMS Reminder: {{violationId}} investigation due on {{dueDate}}",
-    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS investigation assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nInvestigation Due Date: {{dueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the investigation before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS investigation assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nInvestigation Due Date: {{dueDate}}\nCAPA Target Due Date: {{capaDueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the investigation before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"escalation",
     name:"Escalation Reminder",
     subject:"PVMS Escalation: Investigation due date missed for {{violationId}}",
-    body:"Dear Manager,\n\nThe following PVMS case has missed its investigation due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear Manager,\n\nThe following PVMS case has missed its investigation due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nRoot Cause: {{rootCause}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"capaOverdue",
