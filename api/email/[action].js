@@ -290,6 +290,7 @@ async function handleTest(req, res) {
       severity: "Major",
       priority: "Major",
       dueDate: now.toISOString().slice(0, 10),
+      rootCause: "Bypassed standard operating procedure during shift changeover.",
       incidentDate: `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`,
       closureDate: `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`,
       status: "Submitted",

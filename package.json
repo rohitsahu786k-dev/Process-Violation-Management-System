@@ -5,8 +5,7 @@
   "scripts": {
     "build": "node scripts/build-static.js",
     "check": "node scripts/verify-build.js",
-    "dev": "npx vercel dev",
-    "start": "npm run dev"
+    "start": "npx vercel dev"
   },
   "dependencies": {
     "cloudinary": "^2.10.0",

@@ -750,6 +750,13 @@ function ensureRequiredEmailTemplateContent(template) {
     return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
   }
 
+  if (template.id === "due" && !body.includes("{{capaDueDate}}")) {
+    body = body.replace("Investigation Due Date: {{dueDate}}", "Investigation Due Date: {{dueDate}}\nCAPA Target Due Date: {{capaDueDate}}");
+  }
+  if (template.id === "escalation" && !body.includes("{{rootCause}}")) {
+    body = body.replace("Investigation Due Date: {{dueDate}}", "Investigation Due Date: {{dueDate}}\nRoot Cause: {{rootCause}}");
+  }
+
   if (caseDescriptionTemplates.includes(template.id) && !body.includes("{{caseDescription}}")) {
     const line = template.id === "summary"
       ? "Case Description Summary: {{caseDescription}}"
@@ -781,7 +788,7 @@ const EMAIL_TEMPLATE_VARIABLES = [
   "employeeName","userName","violationId","department","category","severity","status",
   "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
   "assignedUser","pendingDays","summaryMonth","openCount","pendingCount","overdueCount","closedCount",
-  "capaActionType","capaActionDescription","capaOwner","capaDueDate",
+  "capaActionType","capaActionDescription","capaOwner","capaDueDate","rootCause",
   "email","temporaryPassword","resetRequestedBy","resetTime","resetLink","caseDescription","portalUrl"
 ];
 
@@ -3894,6 +3901,73 @@ function EmailIntegrationPage({ user, toast }) {
   const [selected, setSelected] = useState(templates[0]?.id || "caseRegistered");
   const [testEmail, setTestEmail] = useState("");
   const [sending, setSending] = useState(false);
+  const [logs, setLogs] = useState([]);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [appliedFrom, setAppliedFrom] = useState("");
+  const [appliedTo, setAppliedTo] = useState("");
+  const [activeTab, setActiveTab] = useState("templates");
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const res = await fetch("/api/reminders/logs");
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.logs)) {
+          setLogs(data.logs);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch email logs", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 10000); // Poll every 10s
+    return () => clearInterval(interval);
+  }, [fetchLogs]);
+
+  const handleApplyFilter = () => {
+    setAppliedFrom(fromDate);
+    setAppliedTo(toDate);
+  };
+
+  const handleResetFilter = () => {
+    setFromDate("");
+    setToDate("");
+    setAppliedFrom("");
+    setAppliedTo("");
+  };
+
+  const handleClearLogs = async () => {
+    if (!window.confirm("Are you sure you want to clear all email logs? This cannot be undone.")) return;
+    try {
+      const res = await fetch("/api/reminders/logs", { method: "DELETE" });
+      if (res.ok) {
+        toast("Email logs cleared", "success");
+        setLogs([]);
+      } else {
+        throw new Error("Failed to clear logs");
+      }
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
+
+  const filteredLogs = logs.filter(log => {
+    if (!log.createdAt) return true;
+    const logDate = new Date(log.createdAt);
+    if (appliedFrom) {
+      const from = new Date(appliedFrom + "T00:00:00");
+      if (logDate < from) return false;
+    }
+    if (appliedTo) {
+      const to = new Date(appliedTo + "T23:59:59");
+      if (logDate > to) return false;
+    }
+    return true;
+  });
 
   useEffect(() => {
     const merged = getEmailTemplates();
@@ -3936,6 +4010,7 @@ function EmailIntegrationPage({ user, toast }) {
     resetTime:"03 Jun 2026, 10:45 am",
     resetLink:`${getPortalUrl()}?resetToken=sample-token&email=amit.sharma%40example.com`,
     caseDescription:"Operator bypassed the approved process checklist before dispatch approval.",
+    rootCause:"Operator bypassed the approved process checklist before dispatch approval.",
     portalUrl:getPortalUrl()
   };
 
@@ -3997,89 +4072,220 @@ function EmailIntegrationPage({ user, toast }) {
   return (
     <div>
       <PageHeader title="Email Integration" sub="Event templates, SMTP test, and automation readiness"
-        actions={<Btn size="sm" onClick={resetTemplates}>Reset Templates</Btn>}
+        actions={activeTab === "templates" ? <Btn size="sm" onClick={resetTemplates}>Reset Templates</Btn> : null}
       />
-      <div style={{display:"grid",gridTemplateColumns:"280px minmax(0,1fr)",gap:16}}>
-        <Card>
-          <CardHeader title="Templates" subtitle={`${templates.length} active templates`}/>
-          <div style={{padding:10,display:"flex",flexDirection:"column",gap:6}}>
-            {templates.map(t => (
-              <button key={t.id} onClick={()=>setSelected(t.id)}
-                style={{textAlign:"left",padding:"10px 11px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:selected===t.id?"var(--blue-l)":"var(--bg3)",color:selected===t.id?"var(--blue)":"var(--text2)",fontWeight:selected===t.id?600:500,display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}
-              >
-                <span>{t.name}</span>
-                {["caseRegistered","caseClosed"].includes(t.id) && <span style={{fontSize:10,textTransform:"uppercase",letterSpacing:".04em",color:selected===t.id?"var(--blue)":"var(--green)"}}>Auto</span>}
-              </button>
-            ))}
-          </div>
-        </Card>
-        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.25fr) minmax(320px,.75fr)",gap:16}}>
-          <div>
-            <Card style={{marginBottom:16}}>
-              <CardHeader title={current.name} subtitle="Subject and body"/>
-              <div style={{padding:16,display:"grid",gap:12}}>
-                <FormGroup label="Subject">
-                  <Input value={current.subject} onChange={v=>updateTemplate("subject",v)}/>
-                </FormGroup>
-                <FormGroup label="Variables">
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                    {EMAIL_TEMPLATE_VARIABLES.map(v=>(
-                      <button key={v} onClick={()=>insertVariable(v)}
-                        style={{border:"1px solid var(--line)",background:"var(--bg)",color:"var(--text3)",borderRadius:"var(--r)",padding:"3px 7px",fontSize:11,fontFamily:"var(--mono)",cursor:"pointer"}}
-                      >{`{{${v}}}`}</button>
-                    ))}
-                  </div>
-                </FormGroup>
-                <FormGroup label="Email Body">
-                  <Textarea value={current.body} onChange={v=>updateTemplate("body",v)} rows={13}/>
-                </FormGroup>
-              </div>
-            </Card>
-            <Card>
-              <CardHeader title="Send Test Email" subtitle="SMTP uses EMAIL_USER and EMAIL_PASS"/>
-              <div style={{padding:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-                <Input type="email" value={testEmail} onChange={setTestEmail} placeholder="recipient@company.com" style={{maxWidth:320}}/>
-                <Btn variant="primary" onClick={sendTest} loading={sending}>Send Test</Btn>
-              </div>
-            </Card>
-          </div>
-          <div>
-            <Card style={{marginBottom:16,overflow:"hidden"}}>
-              <CardHeader title="Live Preview" subtitle={interpolate(current.subject)}/>
-              <div style={{background:"#F3F4F6",padding:14}}>
-                <div style={{maxWidth:520,margin:"0 auto",background:"#FFFFFF",border:"1px solid var(--line)",borderRadius:"var(--r2)",overflow:"hidden",boxShadow:"var(--sh)"}}>
-                  <div style={{background:"#111827",color:"#FFFFFF",padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
-                    <div style={{fontWeight:700,letterSpacing:".02em"}}>ONEPWS PVMS</div>
-                    <div style={{fontSize:11,color:"#FCA5A5",textTransform:"uppercase",letterSpacing:".08em"}}>Automated Mail</div>
-                  </div>
-                  <div style={{padding:18}}>
-                    <div style={{fontSize:15,fontWeight:700,color:"#111827",marginBottom:12}}>{interpolate(current.subject)}</div>
-                    <div dangerouslySetInnerHTML={{__html:bodyPreviewHtml}}/>
-                  </div>
-                  <div style={{background:"#F9FAFB",borderTop:"1px solid var(--line)",padding:"10px 16px",fontSize:11,color:"var(--text3)"}}>
-                    PVMS Automation System | ONEPWS Pvt. Ltd.
+
+      {/* Tabs Selector */}
+      <div style={{display:"flex",gap:8,borderBottom:"1px solid var(--line)",marginBottom:16,paddingBottom:2}}>
+        <button onClick={()=>setActiveTab("templates")}
+          style={{
+            padding:"10px 20px",
+            fontSize:13.5,
+            fontWeight:activeTab==="templates"?600:500,
+            color:activeTab==="templates"?"var(--blue)":"var(--text3)",
+            border:0,
+            borderBottom:activeTab==="templates"?"2px solid var(--blue)":"2px solid transparent",
+            background:"transparent",
+            cursor:"pointer",
+            marginBottom:-3,
+            transition:"all 0.2s ease",
+            outline:"none"
+          }}
+        >
+          Templates & Rules
+        </button>
+        <button onClick={()=>setActiveTab("logs")}
+          style={{
+            padding:"10px 20px",
+            fontSize:13.5,
+            fontWeight:activeTab==="logs"?600:500,
+            color:activeTab==="logs"?"var(--blue)":"var(--text3)",
+            border:0,
+            borderBottom:activeTab==="logs"?"2px solid var(--blue)":"2px solid transparent",
+            background:"transparent",
+            cursor:"pointer",
+            marginBottom:-3,
+            transition:"all 0.2s ease",
+            outline:"none"
+          }}
+        >
+          Email Logs ({filteredLogs.length})
+        </button>
+      </div>
+
+      {activeTab === "templates" ? (
+        <div style={{display:"grid",gridTemplateColumns:"280px minmax(0,1fr)",gap:16}}>
+          <Card>
+            <CardHeader title="Templates" subtitle={`${templates.length} active templates`}/>
+            <div style={{padding:10,display:"flex",flexDirection:"column",gap:6}}>
+              {templates.map(t => (
+                <button key={t.id} onClick={()=>setSelected(t.id)}
+                  style={{textAlign:"left",padding:"10px 11px",border:"1px solid var(--line)",borderRadius:"var(--r)",background:selected===t.id?"var(--blue-l)":"var(--bg3)",color:selected===t.id?"var(--blue)":"var(--text2)",fontWeight:selected===t.id?600:500,display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}
+                >
+                  <span>{t.name}</span>
+                  {["caseRegistered","caseClosed"].includes(t.id) && <span style={{fontSize:10,textTransform:"uppercase",letterSpacing:".04em",color:selected===t.id?"var(--blue)":"var(--green)"}}>Auto</span>}
+                </button>
+              ))}
+            </div>
+          </Card>
+          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.25fr) minmax(320px,.75fr)",gap:16}}>
+            <div>
+              <Card style={{marginBottom:16}}>
+                <CardHeader title={current.name} subtitle="Subject and body"/>
+                <div style={{padding:16,display:"grid",gap:12}}>
+                  <FormGroup label="Subject">
+                    <Input value={current.subject} onChange={v=>updateTemplate("subject",v)}/>
+                  </FormGroup>
+                  <FormGroup label="Variables">
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {EMAIL_TEMPLATE_VARIABLES.map(v=>(
+                        <button key={v} onClick={()=>insertVariable(v)}
+                          style={{border:"1px solid var(--line)",background:"var(--bg)",color:"var(--text3)",borderRadius:"var(--r)",padding:"3px 7px",fontSize:11,fontFamily:"var(--mono)",cursor:"pointer"}}
+                        >{`{{${v}}}`}</button>
+                      ))}
+                    </div>
+                  </FormGroup>
+                  <FormGroup label="Email Body">
+                    <Textarea value={current.body} onChange={v=>updateTemplate("body",v)} rows={13}/>
+                  </FormGroup>
+                </div>
+              </Card>
+              <Card>
+                <CardHeader title="Send Test Email" subtitle="SMTP uses EMAIL_USER and EMAIL_PASS"/>
+                <div style={{padding:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                  <Input type="email" value={testEmail} onChange={setTestEmail} placeholder="recipient@company.com" style={{maxWidth:320}}/>
+                  <Btn variant="primary" onClick={sendTest} loading={sending}>Send Test</Btn>
+                </div>
+              </Card>
+            </div>
+            <div>
+              <Card style={{marginBottom:16,overflow:"hidden"}}>
+                <CardHeader title="Live Preview" subtitle={interpolate(current.subject)}/>
+                <div style={{background:"#F3F4F6",padding:14}}>
+                  <div style={{maxWidth:520,margin:"0 auto",background:"#FFFFFF",border:"1px solid var(--line)",borderRadius:"var(--r2)",overflow:"hidden",boxShadow:"var(--sh)"}}>
+                    <div style={{background:"#111827",color:"#FFFFFF",padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                      <div style={{fontWeight:700,letterSpacing:".02em"}}>ONEPWS PVMS</div>
+                      <div style={{fontSize:11,color:"#FCA5A5",textTransform:"uppercase",letterSpacing:".08em"}}>Automated Mail</div>
+                    </div>
+                    <div style={{padding:18}}>
+                      <div style={{fontSize:15,fontWeight:700,color:"#111827",marginBottom:12}}>{interpolate(current.subject)}</div>
+                      <div dangerouslySetInnerHTML={{__html:bodyPreviewHtml}}/>
+                    </div>
+                    <div style={{background:"#F9FAFB",borderTop:"1px solid var(--line)",padding:"10px 16px",fontSize:11,color:"var(--text3)"}}>
+                      PVMS Automation System | ONEPWS Pvt. Ltd.
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
-            <Card>
-              <CardHeader title="Automation Rules"/>
-              <div style={{padding:0}}>
-                {automationRules.map((rule,i)=>(
-                  <div key={rule.event} style={{padding:"11px 14px",borderBottom:i<automationRules.length-1?"1px solid var(--line)":"none"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:5}}>
-                      <div style={{fontSize:12.5,fontWeight:600,color:"var(--text)"}}>{rule.event}</div>
-                      <span style={{fontSize:10,fontWeight:700,color:"var(--green)",background:"var(--green-bg)",border:"1px solid var(--green-bd)",borderRadius:10,padding:"1px 7px"}}>Active</span>
+              </Card>
+              <Card>
+                <CardHeader title="Automation Rules"/>
+                <div style={{padding:0}}>
+                  {automationRules.map((rule,i)=>(
+                    <div key={rule.event} style={{padding:"11px 14px",borderBottom:i<automationRules.length-1?"1px solid var(--line)":"none"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:5}}>
+                        <div style={{fontSize:12.5,fontWeight:600,color:"var(--text)"}}>{rule.event}</div>
+                        <span style={{fontSize:10,fontWeight:700,color:"var(--green)",background:"var(--green-bg)",border:"1px solid var(--green-bd)",borderRadius:10,padding:"1px 7px"}}>Active</span>
+                      </div>
+                      <div style={{fontSize:11,color:"var(--text3)"}}>Template: {rule.template}</div>
+                      <div style={{fontSize:11,color:"var(--text3)"}}>To: {rule.to} | CC: {rule.cc}</div>
                     </div>
-                    <div style={{fontSize:11,color:"var(--text3)"}}>Template: {rule.template}</div>
-                    <div style={{fontSize:11,color:"var(--text3)"}}>To: {rule.to} | CC: {rule.cc}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
+                  ))}
+                </div>
+              </Card>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <Card>
+          <CardHeader
+            title={
+              <span style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{color:"#3B82F6",fontSize:14}}>●</span>
+                EMAIL LOGS ({filteredLogs.length})
+              </span>
+            }
+            actions={
+              <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:6,alignItems:"center",fontSize:12,color:"var(--text2)"}}>
+                  <span>From:</span>
+                  <input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)}
+                    style={{padding:"4px 8px",border:"1px solid var(--line)",borderRadius:"var(--r)",fontSize:12,background:"var(--bg)"}}
+                  />
+                  <span>To:</span>
+                  <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)}
+                    style={{padding:"4px 8px",border:"1px solid var(--line)",borderRadius:"var(--r)",fontSize:12,background:"var(--bg)"}}
+                  />
+                  <Btn size="sm" onClick={handleApplyFilter}>Apply</Btn>
+                  {(appliedFrom || appliedTo) && <Btn size="sm" ghost onClick={handleResetFilter}>Reset</Btn>}
+                </div>
+                <div style={{borderLeft:"1px solid var(--line)",height:20,margin:"0 4px"}}/>
+                <Btn size="sm" variant="danger" ghost onClick={handleClearLogs}>Clear Logs</Btn>
+              </div>
+            }
+          />
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",minWidth:800}}>
+              <thead>
+                <tr style={{background:"var(--bg)"}}>
+                  {["Type","To","CC","Subject","Status","Sent Date","Attachment"].map(h=>(
+                    <th key={h} style={{padding:"10px 14px",fontSize:11,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".05em",textAlign:"left",borderBottom:"1px solid var(--line)"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={7}>
+                      <EmptyState icon="mail" title="No email logs found" sub="Automated notifications will appear here in real-time."/>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredLogs.map(log => {
+                    const toStr = Array.isArray(log.to) ? log.to.join(", ") : String(log.to || "");
+                    const ccStr = Array.isArray(log.cc) ? log.cc.join(", ") : String(log.cc || "-");
+                    const sentDate = log.createdAt ? new Date(log.createdAt).toLocaleString("en-IN", {
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                      hour12: true
+                    }) : "-";
+                    const attachmentStr = log.attachment || "-";
+                    
+                    let statusStyle = { fontSize:10, padding:"2px 8px", borderRadius:10, border:"1px solid var(--line)", background:"var(--bg2)", color:"var(--text3)", display:"inline-block", fontWeight:600, textTransform:"capitalize" };
+                    if (log.status === "sent" || log.status === "completed") {
+                      statusStyle = { ...statusStyle, color:"var(--green)", background:"var(--green-bg)", borderColor:"var(--green-bd)" };
+                    } else if (log.status === "failed") {
+                      statusStyle = { ...statusStyle, color:"var(--red)", background:"var(--red-bg)", borderColor:"var(--red-bd)" };
+                    } else if (log.status === "skipped") {
+                      statusStyle = { ...statusStyle, color:"var(--amber)", background:"var(--amber-bg)", borderColor:"var(--amber-bd)" };
+                    }
+
+                    return (
+                      <tr key={log._id} style={{borderBottom:"1px solid var(--line)"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="var(--bg)"}
+                        onMouseLeave={e=>e.currentTarget.style.background=""}
+                      >
+                        <td style={{padding:"10px 14px",fontSize:12,fontWeight:600,color:"var(--text2)"}}>{log.type || "unknown"}</td>
+                        <td style={{padding:"10px 14px",fontSize:12,color:"var(--text)",maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={toStr}>{toStr}</td>
+                        <td style={{padding:"10px 14px",fontSize:12,color:"var(--text3)",maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={ccStr}>{ccStr}</td>
+                        <td style={{padding:"10px 14px",fontSize:12.5,fontWeight:500,color:"var(--text)"}}>{log.subject || "-"}</td>
+                        <td style={{padding:"10px 14px"}}>
+                          <span style={statusStyle} title={log.error || ""}>{log.status}</span>
+                        </td>
+                        <td style={{padding:"10px 14px",fontFamily:"var(--mono)",fontSize:11,color:"var(--text3)"}}>{sentDate}</td>
+                        <td style={{padding:"10px 14px",fontSize:12,color:"var(--text3)"}}>{attachmentStr}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

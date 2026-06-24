@@ -140,7 +140,16 @@ function templateFromState(state, id, fallback) {
   if (id === "capaOverdue" && !String(saved.body || "").includes("{{capaDueDate}}")) {
     return fallback;
   }
-  return { ...fallback, ...saved };
+  const merged = { ...fallback, ...saved };
+  let body = String(merged.body || "");
+  if (id === "due" && !body.includes("{{capaDueDate}}")) {
+    body = body.replace("Investigation Due Date: {{dueDate}}", "Investigation Due Date: {{dueDate}}\nCAPA Target Due Date: {{capaDueDate}}");
+  }
+  if (id === "escalation" && !body.includes("{{rootCause}}")) {
+    body = body.replace("Investigation Due Date: {{dueDate}}", "Investigation Due Date: {{dueDate}}\nRoot Cause: {{rootCause}}");
+  }
+  merged.body = body;
+  return merged;
 }
 
 async function logReminderEmail(db, entry) {
@@ -290,7 +299,7 @@ async function processInvestigationDueMissed(db, state, now) {
         violationId: violation.id || "",
         assignedUser: investigator?.name || violation.assignedInvestigator || hod?.name || "Unassigned",
         dueDate: formatEmailDate(violation.dueDate),
-        rootCause: violation.rootCause || "",
+        rootCause: violation.rootCause || "Pending Investigation",
         pendingDays: pendingDays(violation.dueDate, todayKey),
         status,
         caseDescription: violation.description || "",
