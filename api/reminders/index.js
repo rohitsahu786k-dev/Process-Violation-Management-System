@@ -21,6 +21,10 @@ module.exports = async function handler(req, res) {
         violationId: payload.violationId || "",
         caseDescription: payload.caseDescription || payload.description || "",
         dueDate: payload.dueDate ? new Date(payload.dueDate) : null,
+        capaDueDate: payload.capaDueDate ? new Date(payload.capaDueDate) : null,
+        rootCause: payload.rootCause || "",
+        priority: payload.priority || payload.severity || "",
+        userName: payload.userName || "",
         reminderBefore: Number(payload.reminderBefore || 0),
         status: payload.status || "Pending",
         escalationLevel: Number(payload.escalationLevel || 0),
@@ -38,6 +42,7 @@ module.exports = async function handler(req, res) {
       const { id, ...updates } = req.body || {};
       if (!id) return res.status(400).json({ error: "id is required" });
       if (updates.dueDate) updates.dueDate = new Date(updates.dueDate);
+      if (updates.capaDueDate) updates.capaDueDate = new Date(updates.capaDueDate);
       if (updates.nextReminderAt) updates.nextReminderAt = new Date(updates.nextReminderAt);
       await reminders.updateOne({ _id: new ObjectId(id) }, { $set: updates });
       return res.status(200).json({ ok: true });

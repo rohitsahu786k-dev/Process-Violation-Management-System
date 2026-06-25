@@ -129,6 +129,54 @@ function formatEmailDate(value) {
   });
 }
 
+function cleanText(value) {
+  return String(value || "").trim();
+}
+
+function firstNonEmpty(...values) {
+  return values.map(cleanText).find(Boolean) || "";
+}
+
+function pendingCapaActions(violation) {
+  return (Array.isArray(violation?.capaActions) ? violation.capaActions : [])
+    .filter(action => !CLOSED_CAPA_STATUSES.has(normalizeStatus(action.status)));
+}
+
+function earliestPendingCapaDueDate(violation) {
+  const sorted = pendingCapaActions(violation)
+    .filter(action => action.dueDate)
+    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  return sorted.length ? formatEmailDate(sorted[0].dueDate) : "";
+}
+
+function rootCauseForEmail(violation) {
+  const fiveWhy = Array.isArray(violation?.fiveWhy)
+    ? violation.fiveWhy.map(cleanText).filter(Boolean)
+    : [];
+  return firstNonEmpty(
+    violation?.investigatorRemarks,
+    violation?.finalRootCause,
+    violation?.rootCause,
+    fiveWhy[fiveWhy.length - 1],
+    "Pending Investigation"
+  );
+}
+
+function insertEmailLine(body, line, anchorPattern) {
+  const value = String(body || "");
+  if (value.includes(line)) return value;
+  const lines = value.split("\n");
+  const index = lines.findIndex(item => anchorPattern.test(item));
+  if (index >= 0) {
+    lines.splice(index + 1, 0, line);
+    return lines.join("\n");
+  }
+  const marker = "\n\nRegards,";
+  const markerIndex = value.indexOf(marker);
+  if (markerIndex >= 0) return `${value.slice(0, markerIndex)}\n${line}${value.slice(markerIndex)}`;
+  return `${value}\n\n${line}`;
+}
+
 function templateFromState(state, id, fallback) {
   const saved = Array.isArray(state.emailTemplates)
     ? state.emailTemplates.find(template => template && template.id === id)
@@ -143,10 +191,10 @@ function templateFromState(state, id, fallback) {
   const merged = { ...fallback, ...saved };
   let body = String(merged.body || "");
   if (id === "due" && !body.includes("{{capaDueDate}}")) {
-    body = body.replace("Investigation Due Date: {{dueDate}}", "Investigation Due Date: {{dueDate}}\nCAPA Target Due Date: {{capaDueDate}}");
+    body = insertEmailLine(body, "CAPA Target Due Date: {{capaDueDate}}", /investigation\s+due\s+date|due\s+date/i);
   }
   if (id === "escalation" && !body.includes("{{rootCause}}")) {
-    body = body.replace("Investigation Due Date: {{dueDate}}", "Investigation Due Date: {{dueDate}}\nRoot Cause: {{rootCause}}");
+    body = insertEmailLine(body, "Root Cause: {{rootCause}}", /investigation\s+due\s+date|due\s+date/i);
   }
   merged.body = body;
   return merged;
@@ -210,19 +258,13 @@ async function processScheduledReminders(db, state, now) {
       const template = templateFromState(state, type, defaultTemplate);
       
       const violation = violations.find(v => v.id === reminder.violationId);
-      let capaDueDateStr = "";
-      let priorityStr = "";
-      if (violation) {
-        priorityStr = violation.severity || "";
-        const pendingCapa = (violation.capaActions || [])
-          .filter(a => !CLOSED_CAPA_STATUSES.has(normalizeStatus(a.status)));
-        if (pendingCapa.length > 0) {
-          const sorted = pendingCapa.filter(a => a.dueDate).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
-          if (sorted.length > 0) {
-            capaDueDateStr = formatEmailDate(sorted[0].dueDate);
-          }
-        }
-      }
+      const capaDueDateStr = firstNonEmpty(
+        reminder.capaDueDate ? formatEmailDate(reminder.capaDueDate) : "",
+        earliestPendingCapaDueDate(violation),
+        reminder.capaActionDueDate ? formatEmailDate(reminder.capaActionDueDate) : "",
+        "No pending CAPA target date"
+      );
+      const priorityStr = firstNonEmpty(reminder.priority, violation?.severity);
 
       const rendered = renderTemplate(reminder.template || template, {
         userName: reminder.userName || "PVMS User",
@@ -232,7 +274,8 @@ async function processScheduledReminders(db, state, now) {
         status: reminder.status || "Pending",
         portalUrl: normalizePortalUrl(reminder.portalUrl),
         capaDueDate: capaDueDateStr,
-        priority: priorityStr
+        priority: priorityStr,
+        rootCause: firstNonEmpty(reminder.rootCause, rootCauseForEmail(violation))
       });
       await sendEmail({ to: reminder.email, ...rendered });
       sent++;
@@ -299,7 +342,7 @@ async function processInvestigationDueMissed(db, state, now) {
         violationId: violation.id || "",
         assignedUser: investigator?.name || violation.assignedInvestigator || hod?.name || "Unassigned",
         dueDate: formatEmailDate(violation.dueDate),
-        rootCause: violation.rootCause || "Pending Investigation",
+        rootCause: rootCauseForEmail(violation),
         pendingDays: pendingDays(violation.dueDate, todayKey),
         status,
         caseDescription: violation.description || "",
