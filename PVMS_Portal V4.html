@@ -683,21 +683,21 @@ const DEFAULT_EMAIL_TEMPLATES = [
   },
   {
     id:"due",
-    name:"Investigation Due Date Reminder",
-    subject:"PVMS Reminder: {{violationId}} investigation due on {{dueDate}}",
-    body:"Dear {{userName}},\n\nThis is an automated reminder for the pending PVMS investigation assigned to you.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nInvestigation Due Date: {{dueDate}}\nCAPA Target Due Date: {{capaDueDate}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete the investigation before the due date. If support is needed, coordinate with your HOD.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    name:"Due Date Reminder",
+    subject:"PVMS Reminder: CAPA target due soon for {{violationId}}",
+    body:"Dear {{userName}},\n\nThis is an automated reminder that a CAPA action target due date is approaching within the next 02 days.\n\nCase ID: {{violationId}}\nPriority: {{priority}}\nCAPA Type: {{capaActionType}}\nCAPA Owner: {{capaOwner}}\nCAPA Target Due Date: {{capaDueDate}}\nDays Remaining: {{pendingDays}}\nCAPA Description: {{capaActionDescription}}\nCurrent Status: {{status}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease complete or update the CAPA action before the target due date.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"escalation",
     name:"Escalation Reminder",
     subject:"PVMS Escalation: Investigation due date missed for {{violationId}}",
-    body:"Dear Manager,\n\nThe following PVMS case has missed its investigation due date and remains unresolved.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nRoot Cause: {{rootCause}}\nPending Since: {{pendingDays}} days\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear Manager,\n\nThe following PVMS case has missed its investigation due date or the investigation due date is not assigned, and RCA is still pending.\n\nCase ID: {{violationId}}\nAssigned User: {{assignedUser}}\nInvestigation Due Date: {{dueDate}}\nRCA Status: {{rootCause}}\nPending Since / Status: {{pendingDays}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the case and take the necessary action.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"capaOverdue",
     name:"CAPA Target Due Date Missed",
     subject:"PVMS CAPA Escalation: Target due date missed for {{violationId}}",
-    body:"Dear Manager,\n\nThe following CAPA action has missed its target due date and remains pending.\n\nCase ID: {{violationId}}\nCAPA Type: {{capaActionType}}\nCAPA Owner: {{capaOwner}}\nTarget Due Date: {{capaDueDate}}\nPending Since: {{pendingDays}} days\nCAPA Description: {{capaActionDescription}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the CAPA action and ensure closure.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
+    body:"Dear Manager,\n\nThe following CAPA action has missed its target due date or the target due date is not assigned, and the action remains pending.\n\nCase ID: {{violationId}}\nCAPA Type: {{capaActionType}}\nCAPA Owner: {{capaOwner}}\nCAPA Target Due Date: {{capaDueDate}}\nPending Since / Status: {{pendingDays}}\nCAPA Description: {{capaActionDescription}}\nCase Description: {{caseDescription}}\nPVMS Portal: {{portalUrl}}\n\nPlease review the CAPA action and ensure closure.\n\nRegards,\nPVMS Automation System\nONEPWS Pvt. Ltd."
   },
   {
     id:"summary",
@@ -749,7 +749,7 @@ function ensureRequiredEmailTemplateContent(template) {
   if (template.id === "escalation" && defaultTemplate && (/crossed its due date/i.test(String(template.body || "")) || /\{\{violationId\}\}\s+is overdue/i.test(String(template.subject || "")))) {
     return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
   }
-  if (template.id === "due" && defaultTemplate && /Due Date:/i.test(String(template.body || "")) && !/Investigation Due Date:/i.test(String(template.body || ""))) {
+  if (template.id === "due" && defaultTemplate && (/pending PVMS investigation/i.test(String(template.body || "")) || /investigation due/i.test(String(template.subject || "")))) {
     return { ...template, subject:defaultTemplate.subject, body:defaultTemplate.body };
   }
   let body = String(template.body || "");
@@ -763,7 +763,7 @@ function ensureRequiredEmailTemplateContent(template) {
   }
 
   if (template.id === "due" && !body.includes("{{capaDueDate}}")) {
-    body = insertAfterEmailLine(body, "CAPA Target Due Date: {{capaDueDate}}", /investigation\s+due\s+date|due\s+date/i);
+    body = insertAfterEmailLine(body, "CAPA Target Due Date: {{capaDueDate}}", /capa\s+owner|due\s+date/i);
   }
   if (template.id === "escalation" && !body.includes("{{rootCause}}")) {
     body = insertAfterEmailLine(body, "Root Cause: {{rootCause}}", /investigation\s+due\s+date|due\s+date/i);
@@ -4078,7 +4078,7 @@ function EmailIntegrationPage({ user, toast }) {
     { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
     { event:"New user created", template:"New User Welcome", to:"User", cc:"Admin copy" },
     { event:"Password reset", template:"Password Reset", to:"User", cc:"Admin copy" },
-    { event:"Investigation due reminder", template:"Investigation Due Date Reminder", to:"Owner", cc:"Escalation chain" },
+    { event:"CAPA target due reminder", template:"Due Date Reminder", to:"CAPA owner", cc:"HOD, Management" },
     { event:"Investigation overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
     { event:"CAPA target overdue escalation", template:"CAPA Target Due Date Missed", to:"CAPA owner", cc:"HOD, Management" },
   ];
