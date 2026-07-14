@@ -796,6 +796,48 @@ function getEmailTemplateById(id) {
   return getEmailTemplates().find(t => t.id === id);
 }
 
+const CAPA_RECIPIENT_GROUPS = [
+  { id:"employee", label:"Employee", detail:"Employee linked to the PVMS case" },
+  { id:"managerHod", label:"Manager / HOD", detail:"Reporting manager and assigned or department HOD" },
+  { id:"capaOwner", label:"CAPA Owner", detail:"Owner assigned to the overdue CAPA action" },
+  { id:"management", label:"Management", detail:"Employee management contact and active Management users" },
+  { id:"defaultCc", label:"PVMS Distribution List", detail:"Standard PVMS escalation recipients" }
+];
+
+const DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE = {
+  to:["employee","managerHod"],
+  cc:["capaOwner","management","defaultCc"],
+  customTo:"",
+  customCc:""
+};
+
+function normalizeCapaRecipientGroups(groups, fallback) {
+  if (!Array.isArray(groups)) return [...fallback];
+  const valid = new Set(CAPA_RECIPIENT_GROUPS.map(group=>group.id));
+  return [...new Set(groups.filter(group=>valid.has(group)))];
+}
+
+function normalizeCapaOverdueRecipientRule(value) {
+  const saved = value && typeof value === "object" ? value : {};
+  const to = normalizeCapaRecipientGroups(saved.to, DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE.to);
+  const cc = normalizeCapaRecipientGroups(saved.cc, DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE.cc)
+    .filter(group=>!to.includes(group));
+  return {
+    to,
+    cc,
+    customTo:String(saved.customTo||"").trim(),
+    customCc:String(saved.customCc||"").trim()
+  };
+}
+
+function getEmailRecipientRules() {
+  const saved = DB.get("emailRecipientRules", {});
+  return {
+    ...(saved && typeof saved === "object" ? saved : {}),
+    capaOverdue:normalizeCapaOverdueRecipientRule(saved?.capaOverdue)
+  };
+}
+
 const EMAIL_TEMPLATE_VARIABLES = [
   "employeeName","userName","violationId","department","category","severity","status",
   "incidentDate","dueDate","closureDate","assignedHOD","assignedInvestigator",
@@ -3912,6 +3954,7 @@ function AuditTrailPage({ user }) {
 // ============================================================
 function EmailIntegrationPage({ user, toast }) {
   const [templates, setTemplates] = useState(()=>getEmailTemplates());
+  const [recipientRules, setRecipientRules] = useState(()=>getEmailRecipientRules());
   const [selected, setSelected] = useState(templates[0]?.id || "caseRegistered");
   const [testEmail, setTestEmail] = useState("");
   const [sending, setSending] = useState(false);
@@ -3989,6 +4032,11 @@ function EmailIntegrationPage({ user, toast }) {
     if (JSON.stringify(DB.get("emailTemplates", [])) !== JSON.stringify(merged)) {
       DB.set("emailTemplates", merged);
     }
+    const mergedRecipientRules = getEmailRecipientRules();
+    setRecipientRules(mergedRecipientRules);
+    if (JSON.stringify(DB.get("emailRecipientRules", {})) !== JSON.stringify(mergedRecipientRules)) {
+      DB.set("emailRecipientRules", mergedRecipientRules);
+    }
   }, []);
 
   if (user.role !== "Master Admin") return <EmptyState icon="lock" title="Access Restricted" sub="Master Admin only"/>;
@@ -4055,6 +4103,42 @@ function EmailIntegrationPage({ user, toast }) {
     const suffix = current.body && !current.body.endsWith("\n") ? "\n" : "";
     updateTemplate("body", `${current.body || ""}${suffix}{{${name}}}`);
   };
+  const capaRecipientRule = normalizeCapaOverdueRecipientRule(recipientRules.capaOverdue);
+  const persistCapaRecipientRule = (nextRule, message="Recipient routing saved") => {
+    const normalized = normalizeCapaOverdueRecipientRule(nextRule);
+    const nextRules = { ...recipientRules, capaOverdue:normalized };
+    setRecipientRules(nextRules);
+    DB.set("emailRecipientRules", nextRules);
+    if (message) toast(message, "success");
+  };
+  const recipientGroupDestination = groupId => capaRecipientRule.to.includes(groupId)
+    ? "to"
+    : capaRecipientRule.cc.includes(groupId) ? "cc" : "exclude";
+  const updateRecipientGroup = (groupId, destination) => {
+    const next = {
+      ...capaRecipientRule,
+      to:capaRecipientRule.to.filter(id=>id!==groupId),
+      cc:capaRecipientRule.cc.filter(id=>id!==groupId)
+    };
+    if (destination === "to") next.to.push(groupId);
+    if (destination === "cc") next.cc.push(groupId);
+    persistCapaRecipientRule(next);
+  };
+  const updateCustomRecipients = (key, value) => {
+    const next = { ...capaRecipientRule, [key]:value };
+    const nextRules = { ...recipientRules, capaOverdue:next };
+    setRecipientRules(nextRules);
+    DB.set("emailRecipientRules", nextRules);
+  };
+  const resetRecipientRouting = () => persistCapaRecipientRule(
+    DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE,
+    "Default CAPA escalation routing restored"
+  );
+  const recipientGroupLabels = ids => ids
+    .map(id=>CAPA_RECIPIENT_GROUPS.find(group=>group.id===id)?.label)
+    .filter(Boolean);
+  const capaToSummary = [...recipientGroupLabels(capaRecipientRule.to), ...(capaRecipientRule.customTo ? ["Custom"] : [])].join(", ") || "Fallback recipient";
+  const capaCcSummary = [...recipientGroupLabels(capaRecipientRule.cc), ...(capaRecipientRule.customCc ? ["Custom"] : [])].join(", ") || "None";
   const sendTest = async () => {
     if (!testEmail) { toast("Enter a test email address", "error"); return; }
     setSending(true);
@@ -4080,7 +4164,7 @@ function EmailIntegrationPage({ user, toast }) {
     { event:"Password reset", template:"Password Reset", to:"User", cc:"Admin copy" },
     { event:"CAPA target due reminder", template:"Due Date Reminder", to:"CAPA owner", cc:"HOD, Management" },
     { event:"Investigation overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
-    { event:"CAPA target overdue escalation", template:"CAPA Target Due Date Missed", to:"CAPA owner", cc:"HOD, Management" },
+    { event:"CAPA target overdue escalation", template:"CAPA Target Due Date Missed", to:capaToSummary, cc:capaCcSummary },
   ];
 
   return (
@@ -4188,6 +4272,53 @@ function EmailIntegrationPage({ user, toast }) {
                     <div style={{background:"#F9FAFB",borderTop:"1px solid var(--line)",padding:"10px 16px",fontSize:11,color:"var(--text3)"}}>
                       PVMS Automation System | ONEPWS Pvt. Ltd.
                     </div>
+                  </div>
+                </div>
+              </Card>
+              <Card style={{marginBottom:16}}>
+                <CardHeader
+                  title="CAPA Missed Due Date Routing"
+                  subtitle="Controls To and CC for overdue CAPA escalation emails"
+                  actions={<Btn size="sm" ghost onClick={resetRecipientRouting}>Reset</Btn>}
+                />
+                <div style={{padding:14,display:"grid",gap:12}}>
+                  <div style={{padding:"9px 10px",border:"1px solid var(--blue)",background:"var(--blue-l)",borderRadius:"var(--r)",fontSize:11.5,color:"var(--text2)",lineHeight:1.5}}>
+                    Default: Employee and Manager/HOD are in To. CAPA Owner, Management, and the PVMS distribution list are in CC. Changes are saved automatically.
+                  </div>
+                  {CAPA_RECIPIENT_GROUPS.map(group=>(
+                    <div key={group.id} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 105px",gap:10,alignItems:"center"}}>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:600,color:"var(--text)"}}>{group.label}</div>
+                        <div style={{fontSize:10.5,color:"var(--text3)",lineHeight:1.35}}>{group.detail}</div>
+                      </div>
+                      <Select
+                        value={recipientGroupDestination(group.id)}
+                        onChange={value=>updateRecipientGroup(group.id,value)}
+                        options={[
+                          {value:"to",label:"To"},
+                          {value:"cc",label:"CC"},
+                          {value:"exclude",label:"Exclude"}
+                        ]}
+                        style={{paddingTop:6,paddingBottom:6,fontSize:12}}
+                      />
+                    </div>
+                  ))}
+                  <FormGroup label="Additional To Emails">
+                    <Input
+                      value={capaRecipientRule.customTo}
+                      onChange={value=>updateCustomRecipients("customTo",value)}
+                      placeholder="name@company.com; another@company.com"
+                    />
+                  </FormGroup>
+                  <FormGroup label="Additional CC Emails">
+                    <Input
+                      value={capaRecipientRule.customCc}
+                      onChange={value=>updateCustomRecipients("customCc",value)}
+                      placeholder="name@company.com; another@company.com"
+                    />
+                  </FormGroup>
+                  <div style={{fontSize:10.5,color:"var(--text3)",lineHeight:1.45}}>
+                    Duplicate addresses are removed automatically. If a case has no address for a selected To source, the system uses the first available case recipient so the email can still be delivered.
                   </div>
                 </div>
               </Card>

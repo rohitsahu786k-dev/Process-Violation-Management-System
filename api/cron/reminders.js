@@ -1,5 +1,10 @@
 const { getDb } = require("../_lib/db");
-const { sendEmail, renderTemplate, normalizePortalUrl } = require("../_lib/email");
+const { sendEmail, renderTemplate, normalizePortalUrl, ALWAYS_CC } = require("../_lib/email");
+const {
+  DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE,
+  normalizeCapaOverdueRecipientRule,
+  resolveCapaOverdueRecipients
+} = require("../_lib/recipient-rules");
 
 const PVMS_TIME_ZONE = "Asia/Kolkata";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -240,7 +245,7 @@ async function logReminderEmail(db, entry) {
   await db.collection("emailLogs").insertOne({ ...entry, createdAt: new Date() });
 }
 
-async function sendOncePerDay(db, { reminderKey, reminderDate, type, to, cc, template, variables }) {
+async function sendOncePerDay(db, { reminderKey, reminderDate, type, to, cc, template, variables, skipDefaultCc = false }) {
   const toList = uniqueEmails(to);
   if (!toList.length) return { sent: false, skipped: true };
 
@@ -253,7 +258,7 @@ async function sendOncePerDay(db, { reminderKey, reminderDate, type, to, cc, tem
 
   const rendered = renderTemplate(template, variables);
   try {
-    await sendEmail({ to: toList, cc: uniqueEmails(cc), ...rendered });
+    await sendEmail({ to: toList, cc: uniqueEmails(cc), ...rendered, skipCc: skipDefaultCc });
     await logReminderEmail(db, {
       type,
       reminderKey,
@@ -411,6 +416,9 @@ async function processCapaTargetMissed(db, state, now) {
   const users = activeUsers(state.users);
   const violations = Array.isArray(state.violations) ? state.violations : [];
   const template = templateFromState(state, "capaOverdue", capaOverdueTemplate);
+  const recipientRule = normalizeCapaOverdueRecipientRule(
+    state.emailRecipientRules?.capaOverdue || DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE
+  );
   const portalUrl = normalizePortalUrl(state.portalUrl);
   let checked = 0;
   let sent = 0;
@@ -430,14 +438,16 @@ async function processCapaTargetMissed(db, state, now) {
 
       checked++;
       const owner = findUserByIdNameOrEmail(users, action.ownerId || action.owner || action.ownerEmail);
-      const to = uniqueEmails([action.ownerEmail, owner?.email, hod?.email, ...management]);
-      const cc = uniqueEmails([
-        employee?.reportingToEmail,
-        employee?.hodBuhEmail,
-        employee?.managementEmail,
-        hod?.email,
-        ...management
-      ]).filter(email => !to.some(item => normalizeEmail(item) === normalizeEmail(email)));
+      const { to, cc } = resolveCapaOverdueRecipients({
+        rule: recipientRule,
+        violation,
+        action,
+        employee,
+        hod,
+        owner,
+        managementEmails: management,
+        defaultCc: ALWAYS_CC
+      });
 
       const result = await sendOncePerDay(db, {
         reminderKey: `capa-overdue:${violation.id}:${action.id || index}:${dateKey(action.dueDate) || "blank"}`,
@@ -445,6 +455,7 @@ async function processCapaTargetMissed(db, state, now) {
         type: "capa-overdue",
         to,
         cc,
+        skipDefaultCc: true,
         template,
         variables: {
           userName: owner?.name || action.owner || "PVMS User",
