@@ -12,6 +12,7 @@ const ALLOWED_STATE_KEYS = new Set([
   "masterDesigs",
   "disciplinaryMatrix",
   "emailTemplates",
+  "emailRecipientRules",
   "permMatrix",
   "seeded",
   "seq_VMS",

@@ -5,6 +5,7 @@
   "scripts": {
     "build": "node scripts/build-static.js",
     "check": "node scripts/verify-build.js",
+    "test": "node scripts/test-recipient-rules.js",
     "start": "npx vercel dev"
   },
   "dependencies": {

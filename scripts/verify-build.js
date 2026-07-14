@@ -85,6 +85,8 @@ assert(indexHtml.includes("ReactDOM.createRoot"), "index.html is missing the Rea
 assert(indexHtml.includes("/api/sync"), "index.html is missing the sync API integration.");
 assert(indexHtml.includes("{{caseDescription}}"), "Email templates must include the case description variable.");
 assert(indexHtml.includes("{{portalUrl}}"), "Email templates must include the portal URL variable.");
+assert(indexHtml.includes('DB.set("emailRecipientRules"'), "Email recipient routing must be editable from the dashboard.");
+assert(indexHtml.includes('to:["employee","managerHod"]'), "CAPA escalation default To routing is incorrect.");
 assert(indexHtml.includes('activeMasterOptions("masterDesigs", DESIGNATIONS)'), "User designation dropdown must use Master Data designations.");
 assert(!emailLib.includes("Please do not reply directly to this mailbox"), "Email footer still contains the removed no-reply sentence.");
 [
@@ -106,5 +108,7 @@ assert(apiFunctions.length <= 12, `Vercel Hobby supports 12 serverless functions
 for (const file of [...collectJsFiles("api"), ...collectJsFiles("scripts")]) {
   execFileSync(process.execPath, ["--check", path.join(rootDir, file)], { stdio: "pipe" });
 }
+
+execFileSync(process.execPath, [path.join(rootDir, "scripts/test-recipient-rules.js")], { stdio: "pipe" });
 
 console.log("Build verification passed.");
