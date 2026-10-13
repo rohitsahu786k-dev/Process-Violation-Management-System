@@ -1,6 +1,32 @@
 const { getDb } = require("../_lib/db");
 const { sendEmail, renderTemplate, normalizePortalUrl } = require("../_lib/email");
 const crypto = require("crypto");
+const { EMAIL_EVENTS, normalizeEmailSettings, isEmailEnabled } = require("../_lib/email-settings");
+
+async function handleSettings(req, res) {
+  if (!["GET", "POST"].includes(req.method)) return res.status(405).json({ error: "Method not allowed" });
+  try {
+    const db = await getDb();
+    const collection = db.collection("appState");
+    if (req.method === "POST") {
+      const { event, enabled } = req.body || {};
+      if (typeof enabled !== "boolean" || (event !== undefined && !EMAIL_EVENTS.includes(event))) {
+        return res.status(400).json({ error: "Invalid email setting" });
+      }
+      const key = event ? `emailSettings.events.${event}` : "emailSettings.enabled";
+      await collection.updateOne({ _id: "global" }, { $set: { [key]: enabled } }, { upsert: true });
+    }
+    const state = await collection.findOne({ _id: "global" }) || {};
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({ settings: normalizeEmailSettings(state.emailSettings) });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+}
+
+function disabledResponse(res) {
+  return res.status(409).json({ error: "This email is disabled in Email Integration. Contact the administrator.", sent: false, disabled: true });
+}
 
 const passwordResetTemplate = {
   id: "passwordReset",
@@ -91,6 +117,14 @@ async function handleNotification(req, res) {
     const { to, cc, template, variables } = req.body || {};
     if (!to || !template) return res.status(400).json({ error: "Missing recipient or template" });
 
+    if (!["caseRegistered", "caseClosed"].includes(template.id)) return res.status(400).json({ error: "Invalid notification event" });
+    const db = await getDb();
+    const state = await db.collection("appState").findOne({ _id: "global" }) || {};
+    if (!isEmailEnabled(state, template.id)) {
+      await logEmail({ type: template.id, to, status: "skipped", error: "Email disabled" });
+      return res.status(200).json({ ok: true, sent: false, disabled: true });
+    }
+
     const rendered = renderTemplate(template, variables || {});
     try {
       await sendEmail({ to, cc, ...rendered });
@@ -124,6 +158,7 @@ async function handlePasswordReset(req, res) {
       return res.status(200).json({ ok: true, sent: false });
     }
 
+    if (!isEmailEnabled(state, "passwordReset")) return disabledResponse(res);
     const template = getTemplate(state, "passwordReset", passwordResetTemplate, "{{resetLink}}");
     const resetToken = generateResetToken();
     const resetLink = appendPortalParams(portalUrl, { resetToken, email });
@@ -223,6 +258,7 @@ async function handleUserInvite(req, res) {
   try {
     const db = await getDb();
     const state = await db.collection("appState").findOne({ _id: "global" }) || {};
+    if (!isEmailEnabled(state, "userInvite")) return disabledResponse(res);
     const users = Array.isArray(state.users) ? state.users : [];
     const existingIndex = users.findIndex(u => normalizeEmail(u.email) === email);
     const existingUser = existingIndex >= 0 ? users[existingIndex] : null;
@@ -279,6 +315,9 @@ async function handleTest(req, res) {
   try {
     const { to, template } = req.body || {};
     if (!to || !template) return res.status(400).json({ error: "Missing recipient or template" });
+    const db = await getDb();
+    const state = await db.collection("appState").findOne({ _id: "global" }) || {};
+    if (!isEmailEnabled(state)) return disabledResponse(res);
     const now = new Date();
     const rendered = renderTemplate(template, {
       userName: "All",
@@ -324,6 +363,7 @@ async function handleTest(req, res) {
 
 module.exports = async function handler(req, res) {
   const action = routeAction(req);
+  if (action === "settings") return handleSettings(req, res);
 
   if (action === "notification") return handleNotification(req, res);
   if (action === "password-reset") return handlePasswordReset(req, res);

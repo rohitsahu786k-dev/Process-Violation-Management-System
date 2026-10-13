@@ -1,4 +1,5 @@
 const { getDb } = require("../_lib/db");
+const { isEmailEnabled } = require("../_lib/email-settings");
 const { sendEmail, renderTemplate, normalizePortalUrl, ALWAYS_CC } = require("../_lib/email");
 const {
   DEFAULT_CAPA_OVERDUE_RECIPIENT_RULE,
@@ -285,6 +286,7 @@ async function sendOncePerDay(db, { reminderKey, reminderDate, type, to, cc, tem
 }
 
 async function processScheduledReminders(db, state, now) {
+  if (!isEmailEnabled(state)) return { checked: 0, sent: 0, disabled: true };
   const todayKey = localDateKey(now);
   const reminders = await db.collection("reminders").find({
     isActive: true,
@@ -297,6 +299,7 @@ async function processScheduledReminders(db, state, now) {
   for (const reminder of reminders) {
     try {
       const type = reminder.type || "due";
+      if (!isEmailEnabled(state, type)) continue;
       const template = templateFromState(state, type, defaultTemplate);
       
       const violation = violations.find(v => v.id === reminder.violationId);
@@ -359,6 +362,7 @@ async function processScheduledReminders(db, state, now) {
 }
 
 async function processInvestigationDueMissed(db, state, now) {
+  if (!isEmailEnabled(state, "escalation")) return { checked: 0, sent: 0, disabled: true };
   const todayKey = localDateKey(now);
   const users = activeUsers(state.users);
   const violations = Array.isArray(state.violations) ? state.violations : [];
@@ -412,6 +416,7 @@ async function processInvestigationDueMissed(db, state, now) {
 }
 
 async function processCapaTargetMissed(db, state, now) {
+  if (!isEmailEnabled(state, "capaOverdue")) return { checked: 0, sent: 0, disabled: true };
   const todayKey = localDateKey(now);
   const users = activeUsers(state.users);
   const violations = Array.isArray(state.violations) ? state.violations : [];
@@ -481,6 +486,7 @@ async function processCapaTargetMissed(db, state, now) {
 }
 
 async function processCapaTargetDueSoon(db, state, now) {
+  if (!isEmailEnabled(state, "due")) return { checked: 0, sent: 0, disabled: true };
   const todayKey = localDateKey(now);
   const users = activeUsers(state.users);
   const violations = Array.isArray(state.violations) ? state.violations : [];

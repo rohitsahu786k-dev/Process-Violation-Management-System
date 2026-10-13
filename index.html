@@ -313,6 +313,7 @@ async function notifyCaseEvent(eventType, violation) {
     ]).filter(email => !to.includes(email));
 
     const template = getEmailTemplateById(isClosed ? "caseClosed" : "caseRegistered") || {
+      id: isClosed ? "caseClosed" : "caseRegistered",
       subject: isClosed ? "PVMS Case Closed: {{violationId}}" : "New PVMS Case Registered: {{violationId}}",
       body: "Dear {{employeeName}},\n\nPVMS case {{violationId}} has been updated.\n\nRegards,\nPVMS Automation System"
     };
@@ -3953,6 +3954,39 @@ function AuditTrailPage({ user }) {
 // EMAIL INTEGRATION PAGE
 // ============================================================
 function EmailIntegrationPage({ user, toast }) {
+  const [emailSettings, setEmailSettings] = useState(null);
+  const [savingEmailSetting, setSavingEmailSetting] = useState(false);
+  const [emailSettingsError, setEmailSettingsError] = useState("");
+  const loadEmailSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/email/settings", { cache:"no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unable to load email settings");
+      setEmailSettings(data.settings);
+      setEmailSettingsError("");
+    } catch (err) {
+      setEmailSettingsError(err.message);
+    }
+  }, []);
+  useEffect(() => { if (user.role === "Master Admin") loadEmailSettings(); }, [loadEmailSettings, user.role]);
+  const saveEmailSetting = async (enabled, event) => {
+    if (savingEmailSetting) return;
+    setSavingEmailSetting(true);
+    try {
+      const res = await fetch("/api/email/settings", {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ enabled, ...(event ? { event } : {}) })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unable to save email settings");
+      setEmailSettings(data.settings);
+      toast(`${event ? "Email rule" : "Emails"} ${enabled ? "enabled" : "disabled"}`, "success");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      setSavingEmailSetting(false);
+    }
+  };
   const [templates, setTemplates] = useState(()=>getEmailTemplates());
   const [recipientRules, setRecipientRules] = useState(()=>getEmailRecipientRules());
   const [selected, setSelected] = useState(templates[0]?.id || "caseRegistered");
@@ -4148,23 +4182,24 @@ function EmailIntegrationPage({ user, toast }) {
         headers:{ "Content-Type":"application/json" },
         body:JSON.stringify({ to:testEmail, template:current })
       });
-      if (!res.ok) throw new Error("send failed");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Test email failed. Check email configuration.");
       toast("Test email sent", "success");
     } catch (err) {
-      toast("Test email failed. Check Vercel email environment variables.", "error");
+      toast(err.message, "error");
     } finally {
       setSending(false);
     }
   };
 
   const automationRules = [
-    { event:"New case registered", template:"New Case Registered", to:"Employee", cc:"HOD, Management" },
-    { event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
-    { event:"New user created", template:"New User Welcome", to:"User", cc:"Admin copy" },
-    { event:"Password reset", template:"Password Reset", to:"User", cc:"Admin copy" },
-    { event:"CAPA target due reminder", template:"Due Date Reminder", to:"CAPA owner", cc:"HOD, Management" },
-    { event:"Investigation overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
-    { event:"CAPA target overdue escalation", template:"CAPA Target Due Date Missed", to:capaToSummary, cc:capaCcSummary },
+    { id:"caseRegistered", event:"New case registered", template:"New Case Registered", to:"Employee", cc:"HOD, Management" },
+    { id:"caseClosed", event:"Case closed", template:"Case Closure Notice", to:"Employee", cc:"HOD, Management" },
+    { id:"userInvite", event:"New user created", template:"New User Welcome", to:"User", cc:"Admin copy" },
+    { id:"passwordReset", event:"Password reset", template:"Password Reset", to:"User", cc:"Admin copy" },
+    { id:"due", event:"CAPA target due reminder", template:"Due Date Reminder", to:"CAPA owner", cc:"HOD, Management" },
+    { id:"escalation", event:"Investigation overdue escalation", template:"Escalation Reminder", to:"Manager", cc:"Management" },
+    { id:"capaOverdue", event:"CAPA target overdue escalation", template:"CAPA Target Due Date Missed", to:capaToSummary, cc:capaCcSummary },
   ];
 
   return (
@@ -4173,6 +4208,19 @@ function EmailIntegrationPage({ user, toast }) {
         actions={activeTab === "templates" ? <Btn size="sm" onClick={resetTemplates}>Reset Templates</Btn> : null}
       />
 
+      <Card style={{marginBottom:16}}>
+        <CardHeader title="Email Delivery" subtitle="Enable or disable all outgoing emails, including test emails."/>
+        <div style={{padding:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <span role="status" style={{fontWeight:600,color:emailSettings?.enabled ? "var(--green)" : "var(--text3)"}}>
+            {emailSettings ? (emailSettings.enabled ? "Emails enabled" : "Emails disabled") : (emailSettingsError ? "Settings unavailable" : "Loading settings...")}
+          </span>
+          <Btn size="sm" variant="primary" disabled={!emailSettings || savingEmailSetting || emailSettings.enabled} onClick={()=>saveEmailSetting(true)}>Enable Emails</Btn>
+          <Btn size="sm" variant="danger" disabled={!emailSettings || savingEmailSetting || !emailSettings.enabled} onClick={()=>saveEmailSetting(false)}>Disable Emails</Btn>
+          {savingEmailSetting && <span role="status">Saving...</span>}
+          {emailSettingsError && <><span style={{color:"var(--red)"}}>{emailSettingsError}</span><Btn size="sm" onClick={loadEmailSettings}>Retry</Btn></>}
+          <div style={{width:"100%",fontSize:12,color:"var(--text3)"}}>Individual rule choices are preserved when all emails are disabled. Changes apply to future sends; emails already sent cannot be recalled.</div>
+        </div>
+      </Card>
       {/* Tabs Selector */}
       <div style={{display:"flex",gap:8,borderBottom:"1px solid var(--line)",marginBottom:16,paddingBottom:2}}>
         <button onClick={()=>setActiveTab("templates")}
@@ -4252,7 +4300,7 @@ function EmailIntegrationPage({ user, toast }) {
                 <CardHeader title="Send Test Email" subtitle="SMTP uses EMAIL_USER and EMAIL_PASS"/>
                 <div style={{padding:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                   <Input type="email" value={testEmail} onChange={setTestEmail} placeholder="recipient@company.com" style={{maxWidth:320}}/>
-                  <Btn variant="primary" onClick={sendTest} loading={sending}>Send Test</Btn>
+                  <Btn variant="primary" onClick={sendTest} loading={sending} disabled={!emailSettings?.enabled || savingEmailSetting}>Send Test</Btn>
                 </div>
               </Card>
             </div>
@@ -4329,10 +4377,18 @@ function EmailIntegrationPage({ user, toast }) {
                     <div key={rule.event} style={{padding:"11px 14px",borderBottom:i<automationRules.length-1?"1px solid var(--line)":"none"}}>
                       <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:5}}>
                         <div style={{fontSize:12.5,fontWeight:600,color:"var(--text)"}}>{rule.event}</div>
-                        <span style={{fontSize:10,fontWeight:700,color:"var(--green)",background:"var(--green-bg)",border:"1px solid var(--green-bd)",borderRadius:10,padding:"1px 7px"}}>Active</span>
+                        <span style={{fontSize:10,fontWeight:700,color:emailSettings?.enabled && emailSettings.events[rule.id] ? "var(--green)" : "var(--text3)",border:"1px solid var(--line)",borderRadius:10,padding:"1px 7px"}}>
+                          {!emailSettings ? "Loading" : !emailSettings.events[rule.id] ? "Disabled" : !emailSettings.enabled ? "Paused" : "Active"}
+                        </span>
                       </div>
                       <div style={{fontSize:11,color:"var(--text3)"}}>Template: {rule.template}</div>
                       <div style={{fontSize:11,color:"var(--text3)"}}>To: {rule.to} | CC: {rule.cc}</div>
+                      <div style={{marginTop:8}}>
+                        <Btn size="sm" disabled={!emailSettings || savingEmailSetting}
+                          onClick={()=>saveEmailSetting(!emailSettings.events[rule.id],rule.id)}>
+                          {emailSettings?.events[rule.id] ? "Disable" : "Enable"} Email
+                        </Btn>
+                      </div>
                     </div>
                   ))}
                 </div>
